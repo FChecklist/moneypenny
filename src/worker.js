@@ -17,7 +17,7 @@ export class MoneypennyDO extends DurableObject {
       const db = doDb(ctx.storage);
       ctx.storage.transactionSync(() => migrate(db, MIGRATIONS)); // a half-applied migration is rolled back
       // MNP_STATUS_URL (a plain variable, not a secret) points at the Hub's status.json: the global off-switch
-      this.app = createApp({ db, master: env.MNP_MASTER_SECRET, rail: unconfiguredRail, status: env.MNP_STATUS_URL ? urlStatus(env.MNP_STATUS_URL) : async () => null /* no switch configured: AI keys stay shut */ });
+      this.app = createApp({ db, master: env.MNP_MASTER_SECRET, rail: unconfiguredRail, status: env.MNP_STATUS_URL ? urlStatus(env.MNP_STATUS_URL, { store: { get: () => ctx.storage.get('mnp_status'), set: (v) => ctx.storage.put('mnp_status', v) } }) : env.MNP_STATUS_OPTIONAL === '1' ? async () => ({ hub: { mode: 'on' } }) /* chosen on purpose: no global switch */ : async () => null /* no switch configured: changes stay shut */, requireRate: true });
     });
   }
   fetch(request) {

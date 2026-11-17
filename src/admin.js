@@ -77,7 +77,7 @@ export async function createRule(ctx, b) {
     if (/UNIQUE/i.test(String(e.message))) throw new ApiError(409, 'rule_exists', 'A rule for this event already exists. Edit it instead.');
     throw e;
   }
-  await audit(ctx, 'rule.create', { id, ...r });
+  await audit(ctx, 'rule.create', { ...r, id });
   return { id };
 }
 

@@ -283,6 +283,12 @@ async function refundOrder(ctx, b) {
     await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: keep, kind: 'reinstate', ref: h.id, lotId: id });
     returned += keep;
   }
+  // the bonus unlock a cash-paid order earned goes back in proportion to what is returned
+  if (h.cash_due_minor > 0 && h.payment_ref) {
+    const pc = creditsFromMinor(h.rate_inr ? { ...s, credits_per_usd: h.rate_cpu, inr_paise_per_usd: h.rate_inr } : s, h.currency, h.cash_due_minor);
+    const cut = Math.floor((pc * (h.refunded_credits + want)) / h.credits) - Math.floor((pc * h.refunded_credits) / h.credits);
+    if (cut > 0) await addPaid(ctx, h.account_id, -cut);
+  }
   await ctx.db.run('UPDATE hold SET refunded_credits = refunded_credits + ? WHERE id = ?', want, h.id);
   await emit(ctx, 'refund.credits_returned', { hold_id: h.id, account_id: h.account_id, credits: returned });
   return { returned_credits: returned, money_due_minor: 0 };
@@ -367,23 +373,25 @@ async function chargeback(ctx, b, { freeze = true } = {}) {
   await ctx.db.run('INSERT INTO charged_back (tenant_id, payment_ref, created_at) VALUES (?,?,?)', ctx.tenantId, payRef, ctx.now());
   const family = await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND (lower(origin) = ? OR lower(origin) = ?) AND remaining > 0", ctx.tenantId, payRef, `sale:${payRef}`);
   let removed = 0;
+  let removedSale = 0;
   for (const l of family) {
     await ctx.db.run('UPDATE lot SET remaining = 0 WHERE id = ?', l.id);
     await post(ctx, { accountId: l.account_id, bucket: l.bucket, delta: -l.remaining, kind: 'reversal', ref: payRef, lotId: l.id, extRef: payRef, status: 'reversed' });
     removed += l.remaining;
+    if (String(l.origin).toLowerCase() === `sale:${payRef}`) removedSale += l.remaining;
   }
   // commission already spent or held cannot be taken now: the sale is remembered as owing it (blocks capture, approval and give-back)
   {
     const src = (await ctx.db.all('SELECT original FROM lot WHERE tenant_id = ? AND lower(origin) = ? AND source <> ?', ctx.tenantId, `sale:${payRef}`, 'reinstate')).reduce((n, c) => n + c.original, 0);
     const done = (await ctx.db.first('SELECT clawed FROM sale_reversal WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef))?.clawed ?? 0;
-    const owe = src - done - removed;
+    const owe = src - done - removedSale;
     if (src > 0) await ctx.db.run('INSERT INTO sale_reversal (tenant_id, ref, clawed, owed) VALUES (?,?,?,?) ON CONFLICT (tenant_id, ref) DO UPDATE SET clawed = excluded.clawed, owed = owed + excluded.owed', ctx.tenantId, payRef, src, Math.max(0, owe));
   }
   await flagConversions(ctx, payRef);
   // cash paid on an order with this payment: the bonus unlock it earned goes too
   for (const h of await ctx.db.all("SELECT * FROM hold WHERE tenant_id = ? AND status = 'captured' AND lower(payment_ref) = ?", ctx.tenantId, payRef)) {
     const s = await getSettings(ctx);
-    await addPaid(ctx, h.account_id, -creditsFromMinor(h.rate_inr ? { ...s, credits_per_usd: h.rate_cpu, inr_paise_per_usd: h.rate_inr } : s, h.currency, h.cash_due_minor));
+    { const pc = creditsFromMinor(h.rate_inr ? { ...s, credits_per_usd: h.rate_cpu, inr_paise_per_usd: h.rate_inr } : s, h.currency, h.cash_due_minor); await addPaid(ctx, h.account_id, -(pc - Math.floor((pc * h.refunded_credits) / Math.max(1, h.credits)))); }
     if (freeze) {
       await ctx.db.run("UPDATE account SET status = 'frozen' WHERE id = ?", h.account_id);
       await audit(ctx, 'account.freeze', { account_id: h.account_id, reason: 'chargeback_order', payment_ref: payRef });

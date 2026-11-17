@@ -12,3 +12,4 @@ tag = "v1"
 new_sqlite_classes = ["MoneypennyDO"]
 
 # MNP_MASTER_SECRET is a secret: set it with `wrangler secret put` later, never in this file.
+# MNP_STATUS_URL: the Hub status.json address (plain variable). MNP_STATUS_OPTIONAL=1 only if a global switch is deliberately not used.

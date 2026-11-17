@@ -13,7 +13,7 @@ signature = hex( HMAC-SHA256( secret, [timestamp, nonce, METHOD, pathWithQuery, 
 
 - The timestamp must be within 5 minutes. A nonce works once per key (a replay gets 401).
 - The secret is shown once when a key is made. It is derived from the master secret, so no secret sits in the database.
-- Four key types, least power each: `read` (balance only), `api` (a product's server: spend, events, hand-given bonus, order returns), `purchase` (the payment system: credit bought, money refunds, chargebacks) and `admin`. A key cannot use another type's routes.
+- Five key types, least power each (the fifth, `ai_read`, is read-only plus `POST /v1/ai/ask`, which only makes a request a person must approve): `read` (balance only), `api` (a product's server: spend, events, hand-given bonus, order returns), `purchase` (the payment system: credit bought, money refunds, chargebacks) and `admin`. A key cannot use another type's routes.
 - Every POST/PUT/DELETE also needs `Idempotency-Key` (up to 120 characters); for `credit_purchase` the payment id is used when the header is left out. Same key and same request returns the first answer (`idempotent-replay: true`). Same key and a different request gives 409. A failed call leaves no trace, so its key can be reused.
 - Callers must send only **verified** e-mail addresses. Identity is the lower-cased e-mail.
 
@@ -69,6 +69,7 @@ Ledger entry kinds: `purchase, bonus, commission, hold, capture, release, releas
 | `GET /v1/admin/dead_letters`, `POST /v1/admin/dead_letters/requeue {id}` | rail calls that failed 8 times; requeue after the rail is fixed |
 | `POST /v1/admin/rail/process` | send due rail calls now |
 | `POST /v1/admin/freeze` | `{email, frozen:true or false}` |
+| `GET /v1/admin/approvals`, `POST /v1/admin/approvals/:id/approve` or `/deny` | people decide what an AI key asked for |
 | `POST /v1/admin/webhooks` | `{url}` (public https host; http only for localhost); the secret is shown once |
 
 Tenants and keys are made by the owner's local script only, never by the API.
@@ -84,7 +85,7 @@ Tenants and keys are made by the owner's local script only, never by the API.
 
 ## Webhooks (outbox)
 
-Events are written in the same step as the money change, then delivered signed:
+Events (including `approval.requested`, `conversion.needs_review`, `payment.overpaid`) are written in the same step as the money change, then delivered signed:
 headers `x-mnp-event-id`, `x-mnp-timestamp`, `x-mnp-signature = HMAC(webhookSecret, timestamp + "." + body)`.
 Types: `fx.fetch_failed`, `fx.rate_rejected`, `rail.dead_letter`, `commission.reversed`, `credit.added`, `spend.captured`, `refund.money_due`, `refund.credits_returned`, `account.frozen`, `conversion.requested`, `conversion.paid`.
 Events carry the opaque account id, never an e-mail (references with `@` or spaces are refused). A failed send retries with back-off, up to 10 times.

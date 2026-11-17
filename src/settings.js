@@ -85,6 +85,7 @@ export async function getSettings(ctx) {
     if (paise >= 100) out.inr_paise_per_usd = paise;
     else out.fx_state = 'stale'; // an impossible rate is never used: INR orders stop instead
   }
+  if (fx.state === 'none' && ctx.requireRate) out.fx_state = 'stale'; // a deployed service never prices INR on the hand-typed default
   ctx._settings = out;
   return out;
 }

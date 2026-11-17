@@ -96,7 +96,7 @@ async function creditBonus(c, b) {
 const json = (status, obj, extra = {}) =>
   new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
 
-export function createApp({ db, master, now = Date.now, rail = stubRail, status = null, aiWithoutStatus = false }) {
+export function createApp({ db, master, now = Date.now, rail = stubRail, status = null, aiWithoutStatus = false, requireRate = false }) {
   if (!master || master.length < 16) throw new Error('MNP_MASTER_SECRET is required (16+ characters).');
 
   async function fetch(request) {
@@ -161,7 +161,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
 
       // 2) the work, all or nothing
       const out = await db.tx(async (t) => {
-        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, cache: app.cache, scope: auth.scope, actor: auth.keyId, keyId: auth.keyId, callerType: CALLER[auth.scope], idem: idem || null, _settings: null };
+        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, requireRate: app.requireRate, cache: app.cache, scope: auth.scope, actor: auth.keyId, keyId: auth.keyId, callerType: CALLER[auth.scope], idem: idem || null, _settings: null };
         const set = await getSettings(ctx);
         if (set.kill_switch && auth.scope !== 'admin') throw new ApiError(503, 'paused', 'This service is switched off for now.');
         if (auth.scope === 'ai_read' && !set.ai_enabled) throw new ApiError(403, 'ai_off', 'AI access is switched off for this tenant.');
@@ -213,6 +213,6 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
     return json(out.db ? 200 : 503, out);
   }
 
-  const app = { fetch, db, master, now, rail, status, cache: new Map() };
+  const app = { fetch, db, master, now, rail, status, requireRate, cache: new Map() };
   return app;
 }

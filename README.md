@@ -18,7 +18,7 @@ The public name is one setting (`product_name`). The code name is MNP.
 - **Cash conversion is OFF.** A skeleton engine can calculate and record a request (hold, minimum, approval, TDS). Real money stays behind a payment-rail adapter; the only one shipped is a stub that moves nothing.
 - **Complete register:** each entry records its kind, the exchange rate at that moment, real-money value, TDS/GST fields, status and the outside payment id. `npm run reconcile` shows the credits still owed.
 - **The single gate.** Products price and spend only in credits and call only this service. A price list (catalogue) holds each item's price in credits; `reserve_item` takes the credits all-or-nothing (no cash part). To buy credits a product calls `buy_credits`; this service asks the payment rail (IT Services) for an order through an adapter, and credits arrive only when the rail confirms the payment. Rail calls wait in an outbox, retry with back-off, and become dead letters a person can requeue. `/health` shows db, rail, rates and queue counts. If the database cannot read lots, a recently seen balance is still served, marked `degraded`.
-- **Daily exchange rates.** An append-only `fx_rate` table (rate per US$, fixed for each UTC day, margin per tenant, no approval gate; only a missing, zero, negative or non-number rate is rejected, the last good rate is kept and an alert is raised; last-good fallback with a maximum age). An order keeps the rate it was made at. Payment is only in INR or USD; other currencies are display-only. No network is used here: the rate source is a stub (`npm run fx -- refresh`).
+- **Daily exchange rates.** An append-only `fx_rate` table (rate per US$, fixed for each UTC day, margin per tenant, no approval gate; only a missing, zero, negative or non-number rate is rejected, a rate outside INR 10-500 or moving more than 50% in a day is also refused, the last good rate is kept and an alert is raised; last-good fallback with a maximum age). An order keeps the rate it was made at. Payment is only in INR or USD; other currencies are display-only. No network is used here: the rate source is a stub (`npm run fx -- refresh`).
 - **Stands alone.** It knows only tenants, accounts, credits, buckets, rules and holds. Games and other products are just API clients; there is no end-user login or page.
 
 ## Try it (Node 22.5 or newer; one light process)
@@ -74,6 +74,8 @@ fine for Phase 0 volume; at higher volume split it per tenant.
 The payment side calls `POST /v1/payment_notice` (purchase key) with the payment id, amount and currency. A product can
 then capture the cash part of an order, or earn a commission, only against a payment noted there (or one that bought
 credits). Payment ids are compared without regard to letter case.
+
+**Off-switch and deploy settings.** The Worker reads the Hub's status file (`MNP_STATUS_URL`) and keeps the last good answer, also across restarts. If it has never been read, every change is refused (looking still works). `MNP_STATUS_OPTIONAL=1` runs without a global switch, on purpose. The deployed Worker has no payment side and no rate source yet: money routes refuse, and INR orders refuse until an admin sets a rate. A chargeback of commission that was already spent records a debt on the sale but does not collect it from the earner.
 
 **Known limits (found by audit 4, left for a later phase):** a rail call (up to 4 s) runs inside the one-at-a-time
 transaction in `buy_credits`, so a very slow rail slows everyone: move it after the commit with the outbox before real traffic.

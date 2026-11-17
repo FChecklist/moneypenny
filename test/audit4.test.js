@@ -439,7 +439,7 @@ test('A8-8. a credit purchase must be for the account that paid, when the paymen
   assert.equal((await buy(s.api, 'payer@x.com', 100, 'WHO1')).status, 200);
 });
 
-import { urlStatus } from '../src/status.js';
+import { urlStatus, checkStatus } from '../src/status.js';
 test('A9-1: a Hub outage never turns an "off" answer back on', async () => {
   let t = 1000, down = false;
   const st = urlStatus('http://x', { ttlMs: 10, now: () => t, fetchFn: async () => { if (down) throw new Error('down'); return { ok: true, json: async () => ({ hub: { mode: 'off' } }) }; } });
@@ -458,4 +458,26 @@ test('A9-2: a chargeback of spent commission leaves a debt on the sale; partial 
   await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'AZ1' });
   const row = await s.db.first("SELECT owed FROM sale_reversal WHERE ref = 'az1'");
   assert.ok(row && row.owed > 0);
+});
+
+test('A10-1: off-switch is closed for changes when unknown or malformed; looking stays open', () => {
+  const w = { op: null, method: 'POST', scope: 'purchase' };
+  assert.equal(checkStatus(null, w).code, 'status_unknown');
+  assert.equal(checkStatus({}, w).code, 'status_unknown');
+  assert.equal(checkStatus({ hub: {}, products: {} }, w).code, 'status_unknown');
+  assert.equal(checkStatus(null, { ...w, method: 'GET' }), null);
+  assert.equal(checkStatus({ hub: { mode: 'on' }, products: { mnp: { mode: 'on', writes_allowed: 'false' } } }, w).code, 'paused_global');
+  assert.equal(checkStatus({ hub: { mode: 'on' }, products: { mnp: { mode: 'on', writes_allowed: 0 } } }, w).code, 'paused_global');
+  assert.equal(checkStatus({ hub: { mode: 'on' } }, w), null);
+});
+test('A10-2: a null answer from the Hub never replaces the last good one, and it survives a restart', async () => {
+  let t = 1000, body = { hub: { mode: 'off' } }, kept = null;
+  const store = { get: async () => kept, set: async (v) => { kept = v; } };
+  const fetchFn = async () => ({ ok: true, json: async () => body });
+  const a = urlStatus('http://x', { ttlMs: 10, now: () => t, fetchFn, store });
+  assert.equal((await a()).hub.mode, 'off');
+  body = null; t += 100;
+  assert.equal((await a()).hub.mode, 'off');
+  const b = urlStatus('http://x', { ttlMs: 10, now: () => t, fetchFn: async () => { throw new Error('down'); }, store });
+  assert.equal((await b()).hub.mode, 'off');
 });
