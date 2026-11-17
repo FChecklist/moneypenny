@@ -15,13 +15,16 @@ The public name is one setting (`product_name`). The code name is MNP.
 - **Refunds:** real money only for unspent *bought* credits, and only as a note to IT Services (this system never moves money). A cancelled paid order gives credits back to the pile they came from.
 - **Earning rules** are settings in the database, per tenant. A plain site visit never earns credit.
 - **Safe by design:** every write has an idempotency key; every call is signed and cannot be replayed; the ledger is append-only and hash-chained; every setting change is in an audit log.
-- **Cash conversion is OFF.** The code can record a request (after a hold, a minimum and a tax setting). It never pays anyone.
+- **Cash conversion is OFF.** A skeleton engine can calculate and record a request (hold, minimum, approval, TDS). Real money stays behind a payment-rail adapter; the only one shipped is a stub that moves nothing.
+- **Complete register:** each entry records its kind, the exchange rate at that moment, real-money value, TDS/GST fields, status and the outside payment id. `npm run reconcile` shows the credits still owed.
+- **Stands alone.** It knows only tenants, accounts, credits, buckets, rules and holds. Games and other products are just API clients; there is no end-user login or page.
 
 ## Try it (Node 22.5 or newer; one light process)
 
 ```bash
 npm test          # runs all tests in memory, a few seconds
 npm run seed      # makes .data/dev.sqlite and a 'demo' tenant; prints keys once
+npm run reconcile # credits still owed, by bucket and tenant
 npm run dev       # then open http://localhost:8787/admin and paste the admin key
 ```
 
@@ -30,7 +33,9 @@ npm run dev       # then open http://localhost:8787/admin and paste the admin ke
 | Path | What |
 |---|---|
 | `src/wallet.js` | balance, expiry, buying credit, earning events |
-| `src/spend.js` | reserve / capture / release, refunds, conversion request |
+| `src/spend.js` | reserve / capture / release, refunds, chargeback |
+| `src/convert.js`, `src/rail.js` | conversion engine skeleton and the payment-rail stub |
+| `src/reconcile.js` | credits-owed views |
 | `src/ledger.js` | append-only hash-chained entries and integrity checks |
 | `src/api.js`, `src/auth.js` | the signed HTTP surface |
 | `src/admin.js`, `src/settings.js` | tenant settings, rules, audit |

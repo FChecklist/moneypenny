@@ -20,8 +20,16 @@ export async function setup({ other = false } = {}) {
   const demo = await db.tx((t) => seedDemo({ db: t, now, master }));
   let b = null;
   if (other) b = await db.tx((t) => createTenant({ db: t, now, master }, { id: 'tenb', name: 'Other' }));
+  const mkT = (t) => {
+    const c = makeClient(app, clock, t.api);
+    c.pay = makeClient(app, clock, t.purchase);
+    c.read = makeClient(app, clock, t.read);
+    c.admin = makeClient(app, clock, t.admin);
+    return c;
+  };
   const mk = (keys) => makeClient(app, clock, keys);
-  return { db, app, clock, master, now, demo, other: b, api: mk(demo.api), admin: mk(demo.admin), mk, ctx: (tenantId = 'demo') => ({ db, now, master, tenantId, actor: 'test', _settings: null }) };
+  const api = mkT(demo);
+  return { db, app, clock, master, now, demo, other: b, api, admin: api.admin, mk, mkT, ctx: (tenantId = 'demo') => ({ db, now, master, tenantId, actor: 'test', _settings: null }) };
 }
 
 let n = 0;
@@ -46,7 +54,7 @@ export const bal = async (api, email, details = true) => (await api.get(`/v1/bal
 
 /** Buy credits (real payment) for an account. */
 export const buy = (api, email, credits, ref, extra = {}) =>
-  api.post('/v1/credit', { email, bucket: 'bought', amount: credits, paid_minor: credits, currency: 'USD', payment_ref: ref, ...extra });
+  (api.pay || api).post('/v1/credit_purchase', { email, amount: credits, paid_minor: credits, currency: 'USD', payment_ref: ref, ...extra });
 
 let ek = 0;
 export const event = (api, email, type, extra = {}) => api.post('/v1/event', { email, event_type: type, event_key: `ev-${++ek}-${Math.random()}`, ...extra });

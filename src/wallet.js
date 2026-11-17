@@ -1,29 +1,35 @@
-// Lots, balance, expiry, and the three ways credit comes in (purchase, rule event, manual bonus).
-import { ApiError, DAY, newId, int, str, isUniqueError, canonEmail, normEmail } from './util.js';
+// Lots, balance, expiry, and the ways credit comes in (purchase, rule event, hand-given bonus).
+import { ApiError, DAY, newId, int, ref, str, isUniqueError, canonEmail, normEmail } from './util.js';
 import { getSettings, creditsFromMinor, fmtUsd } from './settings.js';
-import { ensureAccount, findAccount, markPaid, emailOrThrow } from './accounts.js';
+import { ensureAccount, findAccount, addPaid, emailOrThrow } from './accounts.js';
 import { post } from './ledger.js';
 import { emit } from './outbox.js';
+import { audit } from './audit.js';
 
-export const NO_CREDIT_EVENTS = ['site_visit', 'page_view', 'pageview', 'visit', 'view', 'login'];
+// Event names that look like plain browsing never earn credit (rule creation checks the same test).
+export const NO_CREDIT_RE = /(visit|view|login|click|browse|scroll|open|impression)/;
+export const isVisitLike = (type) => NO_CREDIT_RE.test(type);
 
 const expiryFor = (s, bucket, now, override) => {
   const d = override ?? s[`${bucket}_expiry_days`];
   return d > 0 ? now + d * DAY : null;
 };
 
+/** The domain or any parent of it is on the blocked list. */
+export const domainBlocked = (s, domain) => s.blocked_email_domains.some((d) => domain === d || domain.endsWith(`.${d}`));
+
 export async function createLot(ctx, a) {
   const id = newId('lot');
   try {
     await ctx.db.run(
-      'INSERT INTO lot (id, tenant_id, account_id, bucket, original, remaining, created_at, expires_at, eligible_at, source, source_ref, rule_id, paid_minor, currency) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-      id, ctx.tenantId, a.accountId, a.bucket, a.amount, a.amount, ctx.now(), a.expiresAt ?? null, a.eligibleAt ?? 0, a.source, a.sourceRef ?? null, a.ruleId ?? null, a.paidMinor ?? null, a.currency ?? null,
+      'INSERT INTO lot (id, tenant_id, account_id, bucket, original, remaining, created_at, expires_at, eligible_at, source, source_ref, rule_id, paid_minor, currency, origin) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      id, ctx.tenantId, a.accountId, a.bucket, a.amount, a.amount, a.createdAt ?? ctx.now(), a.expiresAt ?? null, a.eligibleAt ?? 0, a.source, a.sourceRef ?? null, a.ruleId ?? null, a.paidMinor ?? null, a.currency ?? null, a.origin ?? null,
     );
   } catch (e) {
     if (isUniqueError(e)) throw new ApiError(409, 'duplicate_ref', 'That reference was already used.');
     throw e;
   }
-  await post(ctx, { accountId: a.accountId, bucket: a.bucket, delta: a.amount, kind: a.kind, ref: a.sourceRef ?? null, lotId: id, meta: a.meta });
+  await post(ctx, { accountId: a.accountId, bucket: a.bucket, delta: a.amount, kind: a.kind, ref: a.sourceRef ?? null, lotId: id, meta: a.meta, moneyMinor: a.paidMinor, currency: a.currency, extRef: a.extRef });
   return id;
 }
 
@@ -32,9 +38,9 @@ export async function getBalance(ctx, email, { details = false } = {}) {
   const s = await getSettings(ctx);
   const acc = await findAccount(ctx, email);
   const now = ctx.now();
-  const zero = { balance: 0, can_convert: 0, settling: 0, next_expiry: null };
-  let r = zero;
-  let buckets = { bought: 0, bonus: 0, commission: 0 };
+  let r = { balance: 0, can_convert: 0, settling: 0, next_expiry: null };
+  const buckets = { bought: 0, bonus: 0, commission: 0 };
+  const convertible = s.conversion_enabled && s.tds_rate_bps != null;
   if (acc) {
     const lots = await ctx.db.all(
       'SELECT bucket, remaining, expires_at, eligible_at, created_at FROM lot WHERE tenant_id = ? AND account_id = ? AND remaining > 0 AND (expires_at IS NULL OR expires_at > ?)',
@@ -50,7 +56,7 @@ export async function getBalance(ctx, email, { details = false } = {}) {
       }
       if (l.expires_at != null && (next == null || l.expires_at < next)) next = l.expires_at;
     }
-    r = { balance, can_convert: s.conversion_enabled ? convert : 0, settling, next_expiry: next };
+    r = { balance, can_convert: convertible && convert >= s.conversion_min_credits ? convert : 0, settling, next_expiry: next };
   }
   const out = {
     ...r,
@@ -82,47 +88,68 @@ export async function expireLots(ctx) {
   return { lots: lots.length, credits: total };
 }
 
+/** One real-payment id can be used once per tenant, whether it bought credits, paid an order or paid out. */
+export async function claimPaymentRef(ctx, refId, kind) {
+  try {
+    await ctx.db.run('INSERT INTO payment_ref (tenant_id, ref, kind, created_at) VALUES (?,?,?,?)', ctx.tenantId, refId, kind, ctx.now());
+  } catch (e) {
+    if (isUniqueError(e)) throw new ApiError(409, kind === 'order' ? 'payment_already_used' : 'duplicate_ref', 'That payment was already used.');
+    throw e;
+  }
+}
+
 // ---------- credit in: purchase ----------
-/** Bought credits, only against a verified real payment (payment_ref is the IT Services payment id). */
+/** Bought credits, only against a verified real payment (payment_ref is the IT Services / Razorpay payment id). */
 export async function creditPurchase(ctx, b) {
   const s = await getSettings(ctx);
-  const acc = await ensureAccount(ctx, b.email);
   const amount = int(b.amount, 'amount', { min: 1, max: 100000000 });
   const paidMinor = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
   const currency = b.currency;
-  const ref = str(b.payment_ref, 'payment_ref', { max: 100 });
+  const payRef = ref(b.payment_ref, 'payment_ref');
   if (creditsFromMinor(s, currency, paidMinor) < amount) throw new ApiError(422, 'amount_exceeds_payment', 'More credits than the payment covers.');
+  const acc = await ensureAccount(ctx, b.email);
   if (acc.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
-  const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bought', amount, source: 'purchase', sourceRef: ref, expiresAt: expiryFor(s, 'bought', ctx.now()), paidMinor, currency, kind: 'purchase' });
-  await markPaid(ctx, acc.id);
-  await emit(ctx, 'credit.added', { account_id: acc.id, bucket: 'bought', amount, ref, lot_id: lotId });
+  await claimPaymentRef(ctx, payRef, 'purchase');
+  const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bought', amount, source: 'purchase', sourceRef: payRef, origin: payRef, expiresAt: expiryFor(s, 'bought', ctx.now()), paidMinor, currency, kind: 'purchase', extRef: payRef });
+  await addPaid(ctx, acc.id, amount);
+  await emit(ctx, 'credit.added', { account_id: acc.id, bucket: 'bought', amount, ref: payRef, lot_id: lotId });
   return { lot_id: lotId, account_id: acc.id, credited: amount };
 }
 
 // ---------- credit in: earning events ----------
-const reject = async (ctx, ev, outcome, extra = {}) => {
-  await ctx.db.run(
+const insertEvent = (ctx, v) =>
+  ctx.db.run(
     'INSERT INTO event_in (tenant_id, event_key, event_type, email_canon, account_id, rule_id, bucket, granted, outcome, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    ctx.tenantId, ev.key, ev.type, ev.canon, extra.accountId ?? null, extra.ruleId ?? null, extra.bucket ?? null, 0, outcome, ctx.now(),
+    ctx.tenantId, v.key, v.type, v.canon, v.accountId ?? null, v.ruleId ?? null, v.bucket ?? null, v.granted ?? 0, v.outcome, ctx.now(),
   );
+
+const reject = async (ctx, ev, outcome, extra = {}) => {
+  await insertEvent(ctx, { ...ev, ...extra, outcome });
   return { granted: 0, reason: outcome };
 };
+
+/** Shared bonus headroom: lifetime cap per person, tenant daily cap. Returns credits still allowed. */
+async function bonusHeadroom(ctx, s, canon, want) {
+  const day = ctx.now() - DAY;
+  const all = await ctx.db.first("SELECT COALESCE(SUM(granted),0) g FROM event_in WHERE tenant_id = ? AND email_canon = ? AND bucket = 'bonus'", ctx.tenantId, canon);
+  const t = await ctx.db.first("SELECT COALESCE(SUM(granted),0) g FROM event_in WHERE tenant_id = ? AND bucket = 'bonus' AND created_at > ?", ctx.tenantId, day);
+  return Math.min(want, s.bonus_lifetime_cap - all.g, s.tenant_daily_bonus_cap - t.g);
+}
 
 /** The rules engine. One event in; the tenant's rule decides credits out. No rule = no credit. */
 export async function processEvent(ctx, b) {
   const s = await getSettings(ctx);
   const email = emailOrThrow(b.email);
   const type = str(b.event_type, 'event_type', { max: 50 });
-  const key = str(b.event_key, 'event_key', { max: 120 });
+  const key = ref(b.event_key, 'event_key', 120);
   const canon = canonEmail(email);
   const ev = { key, type, canon };
 
   const prior = await ctx.db.first('SELECT * FROM event_in WHERE tenant_id = ? AND event_key = ?', ctx.tenantId, key);
   if (prior) return { granted: prior.granted, reason: prior.outcome, duplicate: true };
 
-  if (NO_CREDIT_EVENTS.includes(type)) return reject(ctx, ev, 'no_credit_for_visits');
-  const domain = email.split('@')[1];
-  if (s.blocked_email_domains.includes(domain)) return reject(ctx, ev, 'blocked_domain');
+  if (isVisitLike(type)) return reject(ctx, ev, 'no_credit_for_visits');
+  if (domainBlocked(s, email.split('@')[1])) return reject(ctx, ev, 'blocked_domain');
 
   const day = ctx.now() - DAY;
   const evCount = await ctx.db.first('SELECT COUNT(*) n FROM event_in WHERE tenant_id = ? AND email_canon = ? AND created_at > ?', ctx.tenantId, canon, day);
@@ -131,8 +158,9 @@ export async function processEvent(ctx, b) {
   const rule = await ctx.db.first('SELECT * FROM earning_rule WHERE tenant_id = ? AND event_type = ? AND enabled = 1', ctx.tenantId, type);
   if (!rule) return reject(ctx, ev, 'no_rule');
   const rb = { ruleId: rule.id, bucket: rule.bucket };
+  // Commission is only ever a share of cash received (also enforced when rules are saved).
+  if (rule.bucket === 'commission' && rule.amount_type !== 'pct_cash_bps') return reject(ctx, ev, 'rule_invalid', rb);
 
-  // How much, before caps
   let amount = rule.amount;
   if (rule.amount_type === 'pct_cash_bps') {
     const payer = normEmail(b.payer_email);
@@ -144,18 +172,13 @@ export async function processEvent(ctx, b) {
     if (amount < 1) return reject(ctx, ev, 'amount_zero', rb);
   }
 
-  // Caps (by normalised e-mail, so + tags and gmail dots do not make a second person)
-  const used = async (extra, ...p) => (await ctx.db.first(`SELECT COALESCE(SUM(granted),0) g, COUNT(CASE WHEN granted > 0 THEN 1 END) c FROM event_in WHERE tenant_id = ? AND email_canon = ? ${extra}`, ctx.tenantId, canon, ...p));
+  const used = (extra, ...p) =>
+    ctx.db.first(`SELECT COALESCE(SUM(granted),0) g, COUNT(CASE WHEN granted > 0 THEN 1 END) c FROM event_in WHERE tenant_id = ? AND email_canon = ? ${extra}`, ctx.tenantId, canon, ...p);
   const byRule = await used('AND rule_id = ?', rule.id);
   if (rule.mode === 'once' && byRule.c >= 1) return reject(ctx, ev, 'already_earned', rb);
   if (rule.mode === 'capped' && byRule.c >= (rule.max_count ?? 1)) return reject(ctx, ev, 'limit_reached', rb);
   if (rule.lifetime_cap) amount = Math.min(amount, rule.lifetime_cap - byRule.g);
-  if (rule.bucket === 'bonus') {
-    const allBonus = await used("AND bucket = 'bonus'");
-    amount = Math.min(amount, s.bonus_lifetime_cap - allBonus.g);
-    const t = await ctx.db.first("SELECT COALESCE(SUM(granted),0) g FROM event_in WHERE tenant_id = ? AND bucket = 'bonus' AND created_at > ?", ctx.tenantId, day);
-    amount = Math.min(amount, s.tenant_daily_bonus_cap - t.g);
-  }
+  if (rule.bucket === 'bonus') amount = await bonusHeadroom(ctx, s, canon, amount);
   if (amount < 1) return reject(ctx, ev, 'cap_reached', rb);
 
   const acc = await ensureAccount(ctx, email, { velocity: true });
@@ -163,36 +186,33 @@ export async function processEvent(ctx, b) {
   const eligibleAt = rule.bucket === 'commission' ? ctx.now() + s.commission_hold_days * DAY : 0;
   const lotId = await createLot(ctx, {
     accountId: acc.id, bucket: rule.bucket, amount, source: 'rule', sourceRef: key, ruleId: rule.id,
-    expiresAt: expiryFor(s, rule.bucket, ctx.now(), rule.expiry_days), eligibleAt, kind: 'earn', meta: { event_type: type },
+    expiresAt: expiryFor(s, rule.bucket, ctx.now(), rule.expiry_days), eligibleAt, kind: rule.bucket, meta: { event_type: type },
+    ...(rule.bucket === 'commission' ? { paidMinor: b.cash_minor, currency: b.currency } : {}),
   });
-  await ctx.db.run(
-    'INSERT INTO event_in (tenant_id, event_key, event_type, email_canon, account_id, rule_id, bucket, granted, outcome, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    ctx.tenantId, key, type, canon, acc.id, rule.id, rule.bucket, amount, 'granted', ctx.now(),
-  );
+  await insertEvent(ctx, { ...ev, accountId: acc.id, ruleId: rule.id, bucket: rule.bucket, granted: amount, outcome: 'granted' });
   await emit(ctx, 'credit.added', { account_id: acc.id, bucket: rule.bucket, amount, ref: key, lot_id: lotId });
   return { granted: amount, reason: 'granted', lot_id: lotId, eligible_at: eligibleAt || null };
 }
 
-/** Hand-given bonus: same caps and guards as a rule, one reference per grant. */
+/** Hand-given bonus: same caps and guards as a rule, one reference per grant, and it is audited. */
 export async function creditManualBonus(ctx, b) {
   const s = await getSettings(ctx);
   const amount = int(b.amount, 'amount', { min: 1, max: s.manual_bonus_max });
   const email = emailOrThrow(b.email);
-  const key = `manual:${str(b.ref, 'ref', { max: 100 })}`;
+  const key = `manual:${ref(b.ref, 'ref')}`;
   const canon = canonEmail(email);
-  const prior = await ctx.db.first('SELECT * FROM event_in WHERE tenant_id = ? AND event_key = ?', ctx.tenantId, key);
+  const prior = await ctx.db.first('SELECT 1 x FROM event_in WHERE tenant_id = ? AND event_key = ?', ctx.tenantId, key);
   if (prior) throw new ApiError(409, 'duplicate_ref', 'That reference was already used.');
-  if (s.blocked_email_domains.includes(email.split('@')[1])) throw new ApiError(422, 'blocked_domain', 'This e-mail domain earns nothing.');
-  const all = await ctx.db.first("SELECT COALESCE(SUM(granted),0) g FROM event_in WHERE tenant_id = ? AND email_canon = ? AND bucket = 'bonus'", ctx.tenantId, canon);
-  const grant = Math.min(amount, s.bonus_lifetime_cap - all.g);
-  if (grant < 1) throw new ApiError(422, 'cap_reached', 'This person has reached the lifetime bonus limit.');
+  if (domainBlocked(s, email.split('@')[1])) throw new ApiError(422, 'blocked_domain', 'This e-mail domain earns nothing.');
+  const evCount = await ctx.db.first('SELECT COUNT(*) n FROM event_in WHERE tenant_id = ? AND email_canon = ? AND created_at > ?', ctx.tenantId, canon, ctx.now() - DAY);
+  if (evCount.n >= s.account_events_per_day) throw new ApiError(429, 'too_many_events', 'Too many events for this person today.');
+  const grant = await bonusHeadroom(ctx, s, canon, amount);
+  if (grant < 1) throw new ApiError(422, 'cap_reached', 'This person or this tenant has reached the bonus limit.');
   const acc = await ensureAccount(ctx, email, { velocity: true });
   if (acc.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
-  const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bonus', amount: grant, source: 'manual', sourceRef: key, expiresAt: expiryFor(s, 'bonus', ctx.now()), kind: 'earn', meta: { manual: true } });
-  await ctx.db.run(
-    'INSERT INTO event_in (tenant_id, event_key, event_type, email_canon, account_id, rule_id, bucket, granted, outcome, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    ctx.tenantId, key, 'manual_bonus', canon, acc.id, null, 'bonus', grant, 'granted', ctx.now(),
-  );
+  const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bonus', amount: grant, source: 'manual', sourceRef: key, expiresAt: expiryFor(s, 'bonus', ctx.now()), kind: 'bonus', meta: { manual: true } });
+  await insertEvent(ctx, { key, type: 'manual_bonus', canon, accountId: acc.id, bucket: 'bonus', granted: grant, outcome: 'granted' });
+  await audit(ctx, 'bonus.manual', { account_id: acc.id, amount: grant, ref: key });
   await emit(ctx, 'credit.added', { account_id: acc.id, bucket: 'bonus', amount: grant, ref: key, lot_id: lotId });
   return { granted: grant, lot_id: lotId };
 }
@@ -202,8 +222,10 @@ export async function history(ctx, email, { limit = 50, beforeSeq = null } = {})
   if (!acc) return { entries: [] };
   const n = Math.min(Math.max(limit | 0, 1), 100);
   const rows = await ctx.db.all(
-    'SELECT seq, ts, bucket, delta, kind, ref FROM entry WHERE tenant_id = ? AND account_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?',
+    'SELECT seq, ts, bucket, delta, kind, ref, money_minor, currency, tds_minor, gst_minor, status, ext_ref, rate_cpu, rate_inr FROM entry WHERE tenant_id = ? AND account_id = ? AND seq < ? ORDER BY seq DESC LIMIT ?',
     ctx.tenantId, acc.id, beforeSeq ?? Number.MAX_SAFE_INTEGER, n,
   );
   return { entries: rows, next_before_seq: rows.length === n ? rows[rows.length - 1].seq : null };
 }
+
+export { ApiError };

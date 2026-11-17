@@ -26,8 +26,12 @@ export async function ensureAccount(ctx, email, { velocity = false } = {}) {
   return acc;
 }
 
-export async function markPaid(ctx, accountId) {
-  await ctx.db.run('UPDATE account SET first_paid_at = ? WHERE id = ? AND tenant_id = ? AND first_paid_at IS NULL', ctx.now(), accountId, ctx.tenantId);
+/** Real paid value on record (credits), net of refunds and chargebacks. Bonus unlocks on this. */
+export async function addPaid(ctx, accountId, credits) {
+  await ctx.db.run(
+    'UPDATE account SET paid_credits = MAX(0, paid_credits + ?), first_paid_at = COALESCE(first_paid_at, ?) WHERE id = ? AND tenant_id = ?',
+    credits, ctx.now(), accountId, ctx.tenantId,
+  );
 }
 
 export async function setFrozen(ctx, email, frozen) {

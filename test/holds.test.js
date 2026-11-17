@@ -122,7 +122,7 @@ test('unknown person or unknown hold is handled', async () => {
 
 test('gateway minimum: INR cash left is never below the minimum', async () => {
   const s = await setup();
-  await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 3427, paid_minor: 239900, currency: 'INR', payment_ref: 'pi' });
+  await s.api.pay.post('/v1/credit_purchase', { email: 'a@x.com', bucket: 'bought', amount: 3427, paid_minor: 239900, currency: 'INR', payment_ref: 'pi' });
   // order Rs 2,400 = 240000 paise. Credits could cover all but Rs 0.10-ish; remainder must be 0 or >= 100 paise
   const r = await reserve(s.api, { amount_minor: 240100, currency: 'INR' });
   assert.ok(r.body.cash_due_minor === 0 || r.body.cash_due_minor >= 100, `cash_due ${r.body.cash_due_minor}`);
@@ -131,7 +131,7 @@ test('gateway minimum: INR cash left is never below the minimum', async () => {
 
 test('full coverage waives a sub-credit rounding remainder in the person\'s favour', async () => {
   const s = await setup();
-  await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 3428, paid_minor: 240000, currency: 'INR', payment_ref: 'pi' });
+  await s.api.pay.post('/v1/credit_purchase', { email: 'a@x.com', bucket: 'bought', amount: 3428, paid_minor: 240000, currency: 'INR', payment_ref: 'pi' });
   const r = await reserve(s.api, { amount_minor: 239900, currency: 'INR' }); // 3427 credits cover 239890; 10 paise left
   assert.equal(r.body.cash_due_minor, 0);
 });

@@ -18,8 +18,11 @@ export async function addEndpoint(ctx, url) {
   } catch {
     throw new ApiError(400, 'bad_url', 'Webhook address is not valid.');
   }
-  const local = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+  const local = u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
   if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) throw new ApiError(400, 'bad_url', 'Webhook address must be https.');
+  // never aim a server-side call at private or internal addresses (localhost http stays allowed for local development)
+  const h = u.hostname;
+  if (!local && (/^\d+\.\d+\.\d+\.\d+$/.test(h) || h.startsWith('[') || /(^|\.)(local|internal|localhost|lan|home|corp)$/.test(h) || !h.includes('.'))) throw new ApiError(400, 'bad_url', 'Webhook address must be a public host name.');
   const id = newId('whk');
   await ctx.db.run('INSERT INTO webhook_endpoint (id, tenant_id, url, created_at) VALUES (?,?,?,?)', id, ctx.tenantId, url, ctx.now());
   return { id, secret: await webhookSecret(ctx.master, id) };

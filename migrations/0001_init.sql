@@ -21,7 +21,7 @@ CREATE TABLE tenant_setting (
 CREATE TABLE api_key (
   key_id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenant(id),
-  scope TEXT NOT NULL CHECK (scope IN ('api','admin')),
+  scope TEXT NOT NULL CHECK (scope IN ('api','read','purchase','admin')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
   label TEXT,
   created_at INTEGER NOT NULL
@@ -58,6 +58,7 @@ CREATE TABLE account (
   email_canon TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen')),
   first_paid_at INTEGER,
+  paid_credits INTEGER NOT NULL DEFAULT 0 CHECK (paid_credits >= 0),
   created_at INTEGER NOT NULL,
   UNIQUE (tenant_id, email_norm)
 );
@@ -79,8 +80,11 @@ CREATE TABLE lot (
   rule_id TEXT,
   paid_minor INTEGER,
   currency TEXT,
-  refunded_minor INTEGER NOT NULL DEFAULT 0
+  refunded_minor INTEGER NOT NULL DEFAULT 0,
+  refunded_credits INTEGER NOT NULL DEFAULT 0,
+  origin TEXT
 );
+CREATE INDEX lot_origin ON lot (tenant_id, origin);
 CREATE INDEX lot_account ON lot (tenant_id, account_id, bucket);
 CREATE UNIQUE INDEX lot_source_unique ON lot (tenant_id, source, source_ref) WHERE source_ref IS NOT NULL;
 
@@ -98,6 +102,14 @@ CREATE TABLE entry (
   lot_id TEXT,
   idem TEXT,
   meta TEXT,
+  rate_cpu INTEGER NOT NULL,
+  rate_inr INTEGER NOT NULL,
+  money_minor INTEGER,
+  currency TEXT,
+  tds_minor INTEGER NOT NULL DEFAULT 0,
+  gst_minor INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'posted',
+  ext_ref TEXT,
   prev_hash TEXT NOT NULL,
   hash TEXT NOT NULL,
   PRIMARY KEY (tenant_id, seq)
@@ -172,10 +184,44 @@ CREATE TABLE conversion_request (
   tenant_id TEXT NOT NULL,
   account_id TEXT NOT NULL,
   credits INTEGER NOT NULL CHECK (credits > 0),
-  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested')),
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested','approved','instructed','paid','rejected')),
+  currency TEXT NOT NULL,
+  gross_minor INTEGER NOT NULL,
+  tds_minor INTEGER NOT NULL,
+  gst_minor INTEGER NOT NULL DEFAULT 0,
+  net_minor INTEGER NOT NULL,
   terms TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  approved_by TEXT,
+  rail_ref TEXT,
+  ext_ref TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
+CREATE INDEX conversion_status ON conversion_request (tenant_id, status);
+
+-- Every real-payment id (purchase, order cash, payout) is usable once per tenant.
+CREATE TABLE payment_ref (
+  tenant_id TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('purchase','order','payout')),
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (tenant_id, ref)
+);
+
+CREATE TABLE charged_back (
+  tenant_id TEXT NOT NULL,
+  payment_ref TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (tenant_id, payment_ref)
+);
+
+-- Owner reconcile views (credits still owed). Holds are listed separately; expiry is applied by the API.
+CREATE VIEW v_outstanding AS
+  SELECT tenant_id, bucket, SUM(remaining) AS credits FROM lot WHERE remaining > 0 GROUP BY tenant_id, bucket;
+CREATE VIEW v_held AS
+  SELECT h.tenant_id, p.bucket, SUM(p.amount) AS credits FROM hold h JOIN hold_part p ON p.hold_id = h.id WHERE h.status = 'held' GROUP BY h.tenant_id, p.bucket;
+CREATE VIEW v_conversions AS
+  SELECT tenant_id, status, COUNT(*) AS n, SUM(credits) AS credits, SUM(net_minor) AS net_minor, SUM(tds_minor) AS tds_minor FROM conversion_request GROUP BY tenant_id, status;
 
 CREATE TABLE audit_log (
   tenant_id TEXT NOT NULL,

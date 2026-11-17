@@ -14,7 +14,8 @@ export const SCHEMA = {
   reinstate_min_days: { type: 'int', def: 30, min: 0, max: 3650, doc: 'A returned lot is valid for at least this many days.' },
   bonus_max_order_pct: { type: 'int', def: 50, min: 0, max: 100, doc: 'Bonus may pay at most this percent of one order.' },
   bonus_lifetime_cap: { type: 'int', def: 800, min: 0, max: 10000000, doc: 'Most bonus credits one person can ever earn (800 = $8).' },
-  bonus_needs_paid: { type: 'bool', def: 1, doc: 'Bonus is spendable only after the first real paid purchase.' },
+  bonus_needs_paid: { type: 'bool', def: 1, doc: 'Bonus is spendable only once the person has real paid value on record (net of refunds and chargebacks).' },
+  bonus_unlock_min_credits: { type: 'int', def: 100, min: 1, max: 100000000, doc: 'Real paid value (in credits) needed before bonus can be spent (100 = $1).' },
   commission_hold_days: { type: 'int', def: 7, min: 0, max: 365, doc: 'Days before commission credits can be spent.' },
   hold_minutes: { type: 'int', def: 15, min: 1, max: 120, doc: 'Minutes a reserve (hold) lasts.' },
   capture_grace_minutes: { type: 'int', def: 5, min: 0, max: 120, doc: 'Extra minutes a late payment may still capture a hold.' },
@@ -24,6 +25,9 @@ export const SCHEMA = {
   conversion_enabled: { type: 'bool', def: 0, doc: 'Commission-to-cash requests. OFF until owner switches it on.' },
   conversion_hold_days: { type: 'int', def: 7, min: 0, max: 365, doc: 'Days a commission lot must age before it counts as convertible.' },
   conversion_min_credits: { type: 'int', def: 1500, min: 1, max: 100000000, doc: 'Smallest conversion request (1500 = $15).' },
+  conversion_approval_required: { type: 'bool', def: 1, doc: 'A person must approve each conversion request before it can be sent to a payment rail.' },
+  conversion_currency: { type: 'cur', def: 'INR', doc: 'Currency a conversion is calculated in (INR or USD).' },
+  gst_rate_bps: { type: 'intnull', def: null, min: 0, max: 10000, doc: 'GST rate on conversions in basis points. Recorded on entries; unset = none.' },
   tds_rate_bps: { type: 'intnull', def: null, min: 0, max: 10000, doc: 'TDS rate in basis points. Must be set (by the CA) before conversion can be used.' },
   refund_money_enabled: { type: 'bool', def: 1, doc: 'Allow real-money refunds of unspent bought credits.' },
   blocked_email_domains: { type: 'domains', def: ['mailinator.com', 'guerrillamail.com', '10minutemail.com', 'tempmail.com', 'yopmail.com', 'trashmail.com'], doc: 'Throw-away e-mail domains that earn nothing.' },
@@ -34,7 +38,7 @@ export const SCHEMA = {
   wording_convert_line: { type: 'str', def: 'You can convert {amount}', doc: 'Line under the balance. {amount} is filled in.' },
   wording_settling_line: { type: 'str', def: 'Settling soon: {amount}', doc: 'Line for credits still settling. {amount} is filled in.' },
   theme_enabled: { type: 'bool', def: 1, doc: 'Show the theme skin. Balances are identical with it off.' },
-  theme_name: { type: 'str', def: 'office', doc: 'Theme pack name.' },
+  theme_name: { type: 'str', def: 'classic', doc: 'Theme pack name.' },
   theme_accent: { type: 'color', def: '#0b6b57', doc: 'Accent colour for the balance widget.' },
 };
 
@@ -75,6 +79,9 @@ export function validate(key, value) {
       if (typeof value !== 'string' || !value.length || value.length > 120) throw bad('text up to 120 characters');
       if (/[<>]/.test(value)) throw bad('no angle brackets');
       return value;
+    case 'cur':
+      if (value !== 'INR' && value !== 'USD') throw bad("must be 'INR' or 'USD'");
+      return value;
     case 'color':
       if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) throw bad('colour like #0b6b57');
       return value;
@@ -89,6 +96,14 @@ export async function setSettings(ctx, patch) {
   const clean = {};
   for (const [k, v] of Object.entries(patch)) clean[k] = validate(k, v);
   const before = await getSettings(ctx);
+  if ('credits_per_usd' in clean && clean.credits_per_usd !== before.credits_per_usd) {
+    const any = await ctx.db.first('SELECT 1 x FROM entry WHERE tenant_id = ? LIMIT 1', ctx.tenantId);
+    if (any) throw new ApiError(409, 'rate_locked', 'Credits per US$1 cannot change once credits exist.');
+  }
+  if ('inr_paise_per_usd' in clean) {
+    const o = before.inr_paise_per_usd;
+    if (Math.abs(clean.inr_paise_per_usd - o) * 10 > o) throw new ApiError(422, 'rate_change_too_big', 'The INR rate can move by at most 10% in one change.');
+  }
   for (const [k, v] of Object.entries(clean)) {
     await ctx.db.run(
       'INSERT INTO tenant_setting (tenant_id, key, value, updated_at) VALUES (?,?,?,?) ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',

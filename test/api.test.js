@@ -68,7 +68,7 @@ test('writes need an Idempotency-Key', async () => {
   const s = await setup();
   const r = await buy(s.api, 'a@x.com', 100, 'p1');
   assert.equal(r.status, 200);
-  const none = await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 1, paid_minor: 1, currency: 'USD', payment_ref: 'p2' }, { idem: null });
+  const none = await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bonus', amount: 1, ref: 'r1' }, { idem: null });
   assert.equal(none.body.error.code, 'idempotency_key_required');
   const adminNone = await s.admin.put('/v1/admin/settings', { unit_name: 'X' }, { idem: null });
   assert.equal(adminNone.status, 400);
@@ -77,12 +77,12 @@ test('writes need an Idempotency-Key', async () => {
 test('same key + same request replays; same key + different request conflicts', async () => {
   const s = await setup();
   const body = { email: 'a@x.com', bucket: 'bought', amount: 100, paid_minor: 100, currency: 'USD', payment_ref: 'p1' };
-  const a = await s.api.post('/v1/credit', body, { idem: 'K1' });
-  const b = await s.api.post('/v1/credit', body, { idem: 'K1' });
+  const a = await s.api.pay.post('/v1/credit_purchase', body, { idem: 'K1' });
+  const b = await s.api.pay.post('/v1/credit_purchase', body, { idem: 'K1' });
   assert.equal(b.headers.get('idempotent-replay'), 'true');
   assert.deepEqual(a.body, b.body);
   assert.equal((await bal(s.api, 'a@x.com')).balance, 100);
-  const c = await s.api.post('/v1/credit', { ...body, amount: 50 }, { idem: 'K1' });
+  const c = await s.api.pay.post('/v1/credit_purchase', { ...body, amount: 50 }, { idem: 'K1' });
   assert.equal(c.status, 409);
   assert.equal(c.body.error.code, 'idempotency_conflict');
   const rows = await s.db.all("SELECT * FROM entry WHERE kind = 'purchase'");
@@ -92,10 +92,10 @@ test('same key + same request replays; same key + different request conflicts', 
 test('a failed call changes nothing and can be retried with the same key', async () => {
   const s = await setup();
   const bad = { email: 'a@x.com', bucket: 'bought', amount: 9999, paid_minor: 100, currency: 'USD', payment_ref: 'p1' };
-  assert.equal((await s.api.post('/v1/credit', bad, { idem: 'K2' })).status, 422);
+  assert.equal((await s.api.pay.post('/v1/credit_purchase', bad, { idem: 'K2' })).status, 422);
   assert.equal((await bal(s.api, 'a@x.com')).balance, 0);
   assert.equal((await s.db.all('SELECT * FROM account')).length, 0); // rolled back, even the account row
-  assert.equal((await s.api.post('/v1/credit', { ...bad, amount: 100 }, { idem: 'K2' })).status, 200); // a failed call leaves no trace, so the key is free
+  assert.equal((await s.api.pay.post('/v1/credit_purchase', { ...bad, amount: 100 }, { idem: 'K2' })).status, 200); // a failed call leaves no trace, so the key is free
 });
 
 test('bad JSON, unknown route, giant body', async () => {
@@ -115,15 +115,15 @@ test('bad JSON, unknown route, giant body', async () => {
 // ---------- tenant isolation ----------
 test('tenants cannot see or touch each other', async () => {
   const s = await setup({ other: true });
-  const b = s.mk(s.other.api);
+  const b = s.mkT(s.other);
   await buy(s.api, 'a@x.com', 1000, 'pay-1');
   assert.equal((await bal(b, 'a@x.com')).balance, 0);
   const r = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'o1', amount_minor: 500, currency: 'USD' });
   assert.equal((await b.post('/v1/spend/capture', { hold_id: r.body.hold_id })).status, 404);
   assert.equal((await b.post('/v1/spend/release', { hold_id: r.body.hold_id })).status, 404);
-  assert.equal((await b.post('/v1/refund', { type: 'purchase', payment_ref: 'pay-1' })).status, 404);
+  assert.equal((await b.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'pay-1' })).status, 404);
   assert.equal((await b.post('/v1/refund', { type: 'order', hold_id: r.body.hold_id })).status, 404);
-  assert.equal((await b.post('/v1/refund', { type: 'chargeback', payment_ref: 'pay-1' })).status, 404);
+  assert.equal((await b.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'pay-1' })).status, 404);
   assert.equal((await bal(s.api, 'a@x.com')).balance, 500); // untouched
   // the same payment reference and e-mail are independent per tenant
   assert.equal((await buy(b, 'a@x.com', 700, 'pay-1')).status, 200);
@@ -135,7 +135,7 @@ test('tenants cannot see or touch each other', async () => {
   const seqs = await s.db.all("SELECT tenant_id, MIN(seq) m FROM entry GROUP BY tenant_id ORDER BY tenant_id");
   assert.deepEqual(seqs.map((x) => x.m), [1, 1]);
   // admin keys only reach their own tenant's settings and rules
-  const ba = s.mk(s.other.admin);
+  const ba = b.admin;
   await ba.put('/v1/admin/settings', { unit_name: 'Pts' });
   assert.equal((await s.admin.get('/v1/admin/settings')).body.settings.unit_name, 'Credit $');
   assert.equal((await ba.get('/v1/admin/rules')).body.rules.length, 0);
@@ -145,7 +145,7 @@ test('tenants cannot see or touch each other', async () => {
 test('rule ids from another tenant cannot be edited', async () => {
   const s = await setup({ other: true });
   const rules = (await s.admin.get('/v1/admin/rules')).body.rules;
-  const ba = s.mk(s.other.admin);
+  const ba = s.mkT(s.other).admin;
   assert.equal((await ba.put(`/v1/admin/rules/${rules[0].id}`, { amount: 99999 })).status, 404);
   assert.equal((await ba.del(`/v1/admin/rules/${rules[0].id}`)).status, 404);
 });

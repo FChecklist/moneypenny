@@ -37,7 +37,13 @@ export function normEmail(e) {
   if (typeof e !== 'string') return null;
   const s = e.trim().toLowerCase();
   if (s.length < 5 || s.length > 254) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)) return null;
+  const at = s.indexOf('@');
+  if (at < 1 || at !== s.lastIndexOf('@')) return null;
+  const local = s.slice(0, at);
+  const domain = s.slice(at + 1);
+  // plain ASCII only; no leading/trailing/double dots (a trailing dot is a different spelling of the same host)
+  if (local.length > 64 || !/^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/.test(local)) return null;
+  if (!/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/.test(domain)) return null;
   return s;
 }
 
@@ -63,4 +69,11 @@ export function str(v, name, { max = 200, optional = false } = {}) {
   if (v == null && optional) return null;
   if (typeof v !== 'string' || !v.length || v.length > max) throw new ApiError(400, 'bad_request', `${name} is required (max ${max} characters)`);
   return v;
+}
+
+/** A reference id from a product. No spaces and no "@", so an e-mail can never ride along into events. */
+export function ref(v, name, max = 100) {
+  const s = str(v, name, { max });
+  if (/[\s@]/.test(s)) throw new ApiError(400, 'bad_request', `${name} must not contain spaces or "@"`);
+  return s;
 }

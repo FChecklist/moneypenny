@@ -2,6 +2,7 @@
 // signature = HMAC-SHA256(secret, [ts, nonce, METHOD, path+query, sha256(body)].join("\n")), hex.
 // secret = HMAC-SHA256(MNP_MASTER_SECRET, "mnp-key:" + key_id). Never stored anywhere.
 import { ApiError, hmacHex, sha256Hex, safeEqual, newId, MIN } from './util.js';
+import { audit } from './audit.js';
 
 export const keySecret = (master, keyId) => hmacHex(master, `mnp-key:${keyId}`);
 export const signString = (ts, nonce, method, pathQuery, bodyHash) => [ts, nonce, method.toUpperCase(), pathQuery, bodyHash].join('\n');
@@ -9,6 +10,7 @@ export const signString = (ts, nonce, method, pathQuery, bodyHash) => [ts, nonce
 export async function createApiKey(ctx, { scope, label = null }) {
   const keyId = newId('mk').slice(0, 21);
   await ctx.db.run('INSERT INTO api_key (key_id, tenant_id, scope, label, created_at) VALUES (?,?,?,?,?)', keyId, ctx.tenantId, scope, label, ctx.now());
+  await audit(ctx, 'key.create', { key_id: keyId, scope, label });
   return { key_id: keyId, secret: await keySecret(ctx.master, keyId), scope };
 }
 

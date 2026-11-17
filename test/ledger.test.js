@@ -58,20 +58,20 @@ test('100 credits = US$1 and INR rate is a setting', async () => {
   const b = await bal(s.api, 'a@x.com');
   assert.equal(b.balance, 1250);
   assert.equal(b.display.amount, '12.50');
-  await s.admin.put('/v1/admin/settings', { inr_paise_per_usd: 8000 });
-  assert.equal(creditsFromMinor(await getSettings({ ...s.ctx() }), 'INR', 8000), 100);
+  await s.admin.put('/v1/admin/settings', { inr_paise_per_usd: 7500 });
+  assert.equal(creditsFromMinor(await getSettings({ ...s.ctx() }), 'INR', 7500), 100);
 });
 
 test('cannot mint more credits than the payment covers', async () => {
   const s = await setup();
-  const r = await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 5000, paid_minor: 1000, currency: 'USD', payment_ref: 'p1' });
+  const r = await s.api.pay.post('/v1/credit_purchase', { email: 'a@x.com', bucket: 'bought', amount: 5000, paid_minor: 1000, currency: 'USD', payment_ref: 'p1' });
   assert.equal(r.status, 422);
   assert.equal(r.body.error.code, 'amount_exceeds_payment');
 });
 
 test('INR purchase credits at the INR rate', async () => {
   const s = await setup();
-  const r = await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 3427, paid_minor: 239900, currency: 'INR', payment_ref: 'p-inr' });
+  const r = await s.api.pay.post('/v1/credit_purchase', { email: 'a@x.com', bucket: 'bought', amount: 3427, paid_minor: 239900, currency: 'INR', payment_ref: 'p-inr' });
   assert.equal(r.status, 200);
   assert.equal((await bal(s.api, 'a@x.com')).balance, 3427);
 });

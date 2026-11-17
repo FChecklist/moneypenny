@@ -23,7 +23,7 @@ export function renderBalance(display, { theme } = {}) {
 
 export const STYLE = `
 .mnp-balance{font:15px/1.4 system-ui,sans-serif;display:inline-block;padding:10px 14px;border-radius:12px;border:2px solid var(--mnp-accent,#0b6b57);background:#fff;color:#1c1c1c}
-.mnp-balance[data-theme="office"]{border-radius:4px 14px 4px 14px;box-shadow:3px 3px 0 var(--mnp-accent,#0b6b57)}
+.mnp-balance[data-theme="classic"]{border-radius:4px 14px 4px 14px;box-shadow:3px 3px 0 var(--mnp-accent,#0b6b57)}
 .mnp-label{font-size:12px;letter-spacing:.04em;color:var(--mnp-accent,#0b6b57)}
 .mnp-amount{font-size:26px;font-weight:700}
 .mnp-line{font-size:13px;margin-top:2px}.mnp-soft{opacity:.7}

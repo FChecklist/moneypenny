@@ -47,7 +47,7 @@ test('hold, minimum and amount rules; request only records, never pays', async (
   assert.equal(ok.body.status, 'requested');
   assert.match(ok.body.note, /No payout/);
   const after = await bal(s.api, 'a@x.com');
-  assert.equal(after.can_convert, 400);
+  assert.equal(after.can_convert, 0); // 400 left is under the 1,500 minimum
   assert.equal((await conv(s.api, 1500)).body.error.code, 'more_than_convertible'); // cannot request the same credits twice
   const terms = JSON.parse((await s.db.all('SELECT terms FROM conversion_request'))[0].terms);
   assert.equal(terms.tds_rate_bps, 1000);
@@ -59,7 +59,7 @@ test('hold, minimum and amount rules; request only records, never pays', async (
 test('bought and bonus credits can never be converted', async () => {
   const s = await setup();
   await s.admin.put('/v1/admin/settings', { conversion_enabled: true, tds_rate_bps: 1000, conversion_min_credits: 10 });
-  await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 9000, paid_minor: 9000, currency: 'USD', payment_ref: 'p' });
+  await s.api.pay.post('/v1/credit_purchase', { email: 'a@x.com', bucket: 'bought', amount: 9000, paid_minor: 9000, currency: 'USD', payment_ref: 'p' });
   await event(s.api, 'a@x.com', 'account_created');
   s.clock.t += 30 * DAY;
   const b = await bal(s.api, 'a@x.com');
@@ -82,14 +82,14 @@ test('widget shows one number and an optional convert line, and escapes everythi
 
 test('theme off gives identical balances; the skin only changes the look', async () => {
   const s = await setup();
-  await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 1240, paid_minor: 1240, currency: 'USD', payment_ref: 'p' });
+  await s.api.pay.post('/v1/credit_purchase', { email: 'a@x.com', bucket: 'bought', amount: 1240, paid_minor: 1240, currency: 'USD', payment_ref: 'p' });
   const on = await bal(s.api, 'a@x.com');
   await s.admin.put('/v1/admin/settings', { theme_enabled: false });
   const off = await bal(s.api, 'a@x.com');
   assert.equal(on.balance, off.balance);
   assert.equal(on.display.amount, off.display.amount);
   assert.ok(on.display.theme && off.display.theme === null);
-  assert.ok(renderBalance(on.display).includes('data-theme="office"'));
+  assert.ok(renderBalance(on.display).includes('data-theme="classic"'));
   assert.ok(!renderBalance(off.display).includes('data-theme'));
 });
 

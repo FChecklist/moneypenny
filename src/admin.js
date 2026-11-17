@@ -5,9 +5,11 @@ import { audit, verifyAudit } from './audit.js';
 import { verifyChain, verifyBalances } from './ledger.js';
 import { setFrozen } from './accounts.js';
 import { addEndpoint } from './outbox.js';
-import { expireLots, NO_CREDIT_EVENTS } from './wallet.js';
+import { expireLots } from './wallet.js';
 import { sweepHolds } from './spend.js';
 import { createApiKey } from './auth.js';
+import { isVisitLike } from './wallet.js';
+import { reconcile } from './reconcile.js';
 
 /** Owner/CLI use only (not an API route): makes a tenant with default settings and two keys. */
 export async function createTenant(ctx, { id, name }) {
@@ -16,9 +18,14 @@ export async function createTenant(ctx, { id, name }) {
   const c = { ...ctx, tenantId: tid, _settings: null };
   await seedDefaults(c);
   await audit({ ...c, actor: 'owner-cli' }, 'tenant.create', { name });
-  const api = await createApiKey(c, { scope: 'api', label: 'api' });
-  const admin = await createApiKey(c, { scope: 'admin', label: 'admin' });
-  return { tenant_id: tid, api, admin };
+  const sub = { ...c, actor: 'owner-cli' };
+  return {
+    tenant_id: tid,
+    api: await createApiKey(sub, { scope: 'api', label: 'product server (spend, events)' }),
+    read: await createApiKey(sub, { scope: 'read', label: 'balance read-only' }),
+    purchase: await createApiKey(sub, { scope: 'purchase', label: 'payment system (credit bought, money refunds)' }),
+    admin: await createApiKey(sub, { scope: 'admin', label: 'tenant admin' }),
+  };
 }
 
 const BUCKETS = ['bonus', 'commission'];
@@ -27,10 +34,11 @@ const MODES = ['once', 'capped', 'every'];
 function cleanRule(b, existing = null) {
   const r = { ...(existing || {}), ...b };
   if (typeof r.event_type !== 'string' || !/^[a-z][a-z0-9_]{1,40}$/.test(r.event_type)) throw new ApiError(400, 'bad_rule', 'event_type: lower-case letters, digits, underscore.');
-  if (NO_CREDIT_EVENTS.includes(r.event_type)) throw new ApiError(422, 'no_credit_for_visits', 'Visits and page views never earn credit.');
+  if (isVisitLike(r.event_type)) throw new ApiError(422, 'no_credit_for_visits', 'Plain visits, views, logins and clicks never earn credit.');
   if (!BUCKETS.includes(r.bucket)) throw new ApiError(400, 'bad_rule', "bucket must be 'bonus' or 'commission'.");
   r.amount_type = r.amount_type || 'fixed';
   if (!['fixed', 'pct_cash_bps'].includes(r.amount_type)) throw new ApiError(400, 'bad_rule', "amount_type must be 'fixed' or 'pct_cash_bps'.");
+  if (r.bucket === 'commission' && r.amount_type !== 'pct_cash_bps') throw new ApiError(422, 'commission_needs_cash', 'Commission can only be a percent of cash received.');
   if (r.amount_type === 'pct_cash_bps') {
     if (r.bucket !== 'commission') throw new ApiError(400, 'bad_rule', 'Percent-of-cash rules pay commission only.');
     int(r.amount, 'amount', { min: 1, max: 10000 });
@@ -109,9 +117,12 @@ export async function health(ctx) {
 export async function sweep(ctx) {
   const holds = await sweepHolds(ctx);
   const lots = await expireLots(ctx);
+  await ctx.db.run('DELETE FROM idempotency WHERE tenant_id = ? AND created_at < ?', ctx.tenantId, ctx.now() - 30 * 86400000);
   await audit(ctx, 'sweep', { holds, lots });
   return { holds, lots };
 }
+
+export { reconcile };
 
 export async function auditList(ctx, limit = 100) {
   return { entries: await ctx.db.all('SELECT seq, ts, actor, action, detail FROM audit_log WHERE tenant_id = ? ORDER BY seq DESC LIMIT ?', ctx.tenantId, Math.min(Math.max(limit | 0, 1), 500)) };

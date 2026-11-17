@@ -9,6 +9,7 @@
     "test": "node --test \"test/*.test.js\"",
     "seed": "node scripts/seed-demo.js",
     "dev": "node scripts/dev-server.js",
+    "reconcile": "node scripts/reconcile.js",
     "scan": "node scripts/scan-words.js",
     "rules-doc": "node scripts/gen-rules.js"
   },

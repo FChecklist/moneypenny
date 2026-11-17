@@ -59,17 +59,17 @@ test('refund after spend: only unspent credits can go back as money', async () =
   await buy(s.api, 'a@x.com', 1000, 'pay1');
   const r = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'o1', amount_minor: 800, currency: 'USD' });
   await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id });
-  const full = await s.api.post('/v1/refund', { type: 'purchase', payment_ref: 'pay1' });
+  const full = await s.api.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'pay1' });
   assert.equal(full.status, 200); // default = whatever is unspent
   assert.equal(full.body.returned_credits, 200);
   assert.equal(full.body.money_due_minor, 200);
-  const more = await s.api.post('/v1/refund', { type: 'purchase', payment_ref: 'pay1', credits: 1 });
+  const more = await s.api.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'pay1', credits: 1 });
   assert.equal(more.status, 409);
   assert.equal(more.body.error.code, 'credits_already_used');
   const explicit = await buy(s.api, 'b@x.com', 1000, 'pay2');
   assert.equal(explicit.status, 200);
   await s.api.post('/v1/spend/capture', { hold_id: (await s.api.post('/v1/spend/reserve', { email: 'b@x.com', order_ref: 'o2', amount_minor: 800, currency: 'USD' })).body.hold_id });
-  const tooMuch = await s.api.post('/v1/refund', { type: 'purchase', payment_ref: 'pay2', credits: 1000 });
+  const tooMuch = await s.api.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'pay2', credits: 1000 });
   assert.equal(tooMuch.body.error.code, 'credits_already_used');
   assert.deepEqual(await verifyBalances(s.ctx()), []);
 });
@@ -77,16 +77,16 @@ test('refund after spend: only unspent credits can go back as money', async () =
 test('bonus and commission credits can never come back as money', async () => {
   const s = await setup();
   await event(s.api, 'a@x.com', 'account_created');
-  const r = await s.api.post('/v1/refund', { type: 'purchase', payment_ref: 'ev-anything' });
+  const r = await s.api.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'ev-anything' });
   assert.equal(r.status, 404);
   assert.equal((await bal(s.api, 'a@x.com')).balance, 100);
 });
 
 test('money refund amount follows what was paid, in parts, never above what was paid', async () => {
   const s = await setup();
-  await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bought', amount: 3, paid_minor: 100, currency: 'USD', payment_ref: 'odd' });
+  await s.api.pay.post('/v1/credit_purchase', { email: 'a@x.com', bucket: 'bought', amount: 3, paid_minor: 100, currency: 'USD', payment_ref: 'odd' });
   let total = 0;
-  for (let i = 0; i < 3; i++) total += (await s.api.post('/v1/refund', { type: 'purchase', payment_ref: 'odd', credits: 1 })).body.money_due_minor;
+  for (let i = 0; i < 3; i++) total += (await s.api.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'odd', credits: 1 })).body.money_due_minor;
   assert.ok(total <= 100);
   assert.ok(total >= 99);
 });
@@ -131,7 +131,7 @@ test('chargeback removes what is left of that purchase and pauses the account', 
   await buy(s.api, 'a@x.com', 1000, 'p1');
   const r = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'o1', amount_minor: 300, currency: 'USD' });
   await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id });
-  const c = await s.api.post('/v1/refund', { type: 'chargeback', payment_ref: 'p1' });
+  const c = await s.api.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'p1' });
   assert.equal(c.body.removed_credits, 700);
   assert.equal((await bal(s.api, 'a@x.com')).balance, 0);
   const again = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'o2', amount_minor: 300, currency: 'USD' });
