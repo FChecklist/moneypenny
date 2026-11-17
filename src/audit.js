@@ -8,8 +8,10 @@ export async function audit(ctx, action, detail = {}) {
   const ts = ctx.now();
   const actor = ctx.actor || 'system';
   const d = JSON.stringify(detail);
-  const hash = await sha256Hex(JSON.stringify([ctx.tenantId, seq, ts, actor, action, d, prev]));
-  await ctx.db.run('INSERT INTO audit_log (tenant_id, seq, ts, actor, action, detail, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?)', ctx.tenantId, seq, ts, actor, action, d, prev, hash);
+  const caller = ctx.callerType || 'system'; // ai, product, payment, human, owner or system
+  const keyId = ctx.keyId || null;
+  const hash = await sha256Hex(JSON.stringify([ctx.tenantId, seq, ts, actor, action, d, prev, caller, keyId]));
+  await ctx.db.run('INSERT INTO audit_log (tenant_id, seq, ts, actor, action, detail, prev_hash, hash, caller_type, key_id) VALUES (?,?,?,?,?,?,?,?,?,?)', ctx.tenantId, seq, ts, actor, action, d, prev, hash, caller, keyId);
 }
 
 export async function verifyAudit(ctx) {
@@ -18,7 +20,7 @@ export async function verifyAudit(ctx) {
   let n = 0;
   for (const r of rows) {
     n++;
-    const h = await sha256Hex(JSON.stringify([r.tenant_id, r.seq, r.ts, r.actor, r.action, r.detail, prev]));
+    const h = await sha256Hex(JSON.stringify([r.tenant_id, r.seq, r.ts, r.actor, r.action, r.detail, prev, r.caller_type, r.key_id]));
     if (r.seq !== n || r.prev_hash !== prev || r.hash !== h) return { ok: false, broken_at: r.seq };
     prev = r.hash;
   }

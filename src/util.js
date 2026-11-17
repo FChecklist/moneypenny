@@ -1,6 +1,7 @@
 // Small shared helpers. Uses only Web Crypto so it runs in Workers and Node alike.
 export const DAY = 86400000;
 export const MIN = 60000;
+export const HOUR = 3600000;
 const enc = new TextEncoder();
 
 export class ApiError extends Error {

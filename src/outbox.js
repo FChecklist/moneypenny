@@ -24,7 +24,7 @@ export async function addEndpoint(ctx, url) {
   if (u.protocol !== 'https:' && !local) throw new ApiError(400, 'bad_url', 'Webhook address must be https.');
   // never aim a server-side call at private or internal addresses (localhost http stays allowed for local development)
   // The sender that really makes the call must ALSO check the resolved IP address (a name can point inside).
-  const blockedName = /(^|\.)(local|internal|lan|home|corp|intranet|private|localdomain|localhost)$/.test(h) || /^localhost(\.|$)/.test(h) || /(^|\.)(nip\.io|sslip\.io|xip\.io|localtest\.me|lvh\.me|metadata\.google\.internal)$/.test(h);
+  const blockedName = /(^|\.)(local|internal|lan|home|corp|intranet|private|localdomain|localhost)$/.test(h) || /^localhost(\.|$)/.test(h) || /(^|\.)(nip\.io|sslip\.io|xip\.io|localtest\.me|lvh\.me|traefik\.me|vcap\.me|1u\.ms|metadata\.google\.internal)$/.test(h);
   if (!local && (/^\d+\.\d+\.\d+\.\d+$/.test(h) || h.startsWith('[') || h.includes(':') || blockedName || !h.includes('.'))) throw new ApiError(400, 'bad_url', 'Webhook address must be a public host name.');
   const id = newId('whk');
   await ctx.db.run('INSERT INTO webhook_endpoint (id, tenant_id, url, created_at) VALUES (?,?,?,?)', id, ctx.tenantId, url, ctx.now());

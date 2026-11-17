@@ -39,6 +39,8 @@ CREATE TABLE purchase_order (
   credits INTEGER NOT NULL CHECK (credits > 0),
   currency TEXT NOT NULL CHECK (currency IN ('INR','USD')),
   amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+  lock_until INTEGER NOT NULL,           -- the rate is locked until then (set when the order is made)
+  paid_minor INTEGER,                    -- what was actually paid (may be more than amount_minor)
   rate_cpu INTEGER NOT NULL,
   rate_inr INTEGER NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending_rail','awaiting_payment','paid','failed')),

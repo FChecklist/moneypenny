@@ -48,6 +48,11 @@ export const SCHEMA = {
   account_events_per_day: { type: 'int', def: 20, min: 1, max: 100000, doc: 'Earning events counted per person per 24 hours.' },
   new_accounts_per_hour: { type: 'int', def: 100, min: 1, max: 1000000, doc: 'New people created by earning events per hour.' },
   tenant_daily_bonus_cap: { type: 'int', def: 50000, min: 0, max: 1000000000, doc: 'Most bonus credits given across the whole tenant per 24 hours.' },
+  kill_switch: { type: 'bool', def: 0, doc: 'Tenant off-switch. When 1 every call except admin keys is refused (503 paused).' },
+  ai_enabled: { type: 'bool', def: 1, doc: 'When 0 every AI key is refused (403 ai_off).' },
+  ai_rate_per_minute: { type: 'int', def: 60, min: 1, max: 100000, doc: 'Signed calls an AI key may make per minute.' },
+  ai_pending_max: { type: 'int', def: 20, min: 1, max: 1000, doc: 'Most requests one AI key may have waiting for a person.' },
+  ai_approval_ttl_hours: { type: 'int', def: 24, min: 1, max: 720, doc: 'Hours a request from an AI key waits for a person before it runs out.' },
   api_rate_per_minute: { type: 'int', def: 600, min: 1, max: 1000000, doc: 'Signed calls allowed per key per minute.' },
   wording_convert_line: { type: 'str', def: 'You can convert {amount}', doc: 'Line under the balance. {amount} is filled in with credits and their US$ value.' },
   wording_settling_line: { type: 'str', def: 'Settling soon: {amount}', doc: 'Line for credits still settling. {amount} is filled in.' },
@@ -73,7 +78,11 @@ export async function getSettings(ctx) {
   const fx = await currentRate(ctx, 'INR', out.fx_max_age_hours);
   out.fx_state = fx.state;
   out.fx_as_of = fx.as_of ?? null;
-  if (fx.state !== 'none') out.inr_paise_per_usd = Math.max(100, Math.round((fx.row.rate_x10000 / 100) * (10000 + out.fx_margin_bps) / 10000));
+  if (fx.state !== 'none') {
+    const paise = Math.round((fx.row.rate_x10000 / 100) * (10000 + out.fx_margin_bps) / 10000);
+    if (paise >= 100) out.inr_paise_per_usd = paise;
+    else out.fx_state = 'stale'; // an impossible rate is never used: INR orders stop instead
+  }
   ctx._settings = out;
   return out;
 }

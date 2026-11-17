@@ -168,7 +168,8 @@ test('health: shows whether parts work, never tenant data', async () => {
   const h = await r.json();
   assert.equal(r.status, 200);
   assert.equal(h.db, true);
-  assert.equal(h.rail.name, 'stub');
+  assert.equal(h.rail.name, undefined); // the open page does not say which rail
+  assert.equal(h.outbox, undefined); // and gives no counts
   assert.equal(h.rail.ok, true);
   assert.ok(!JSON.stringify(h).includes('demo'));
   s.app.rail = { name: 'down', async createOrder() { throw new Error('x'); }, async health() { return { ok: false }; } };

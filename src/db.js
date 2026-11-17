@@ -58,7 +58,17 @@ export function openDb(path = ':memory:') {
 
 export function migrate(db) {
   const dir = join(here, '..', 'migrations');
+  db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (file TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+  const has = (t) => db.raw.prepare("SELECT 1 x FROM sqlite_master WHERE type = 'table' AND name = ?").get(t);
+  const done = new Set(db.raw.prepare('SELECT file FROM schema_migrations').all().map((r) => r.file));
+  // a database made before this table existed: work out what it already has
+  if (!done.size && has('tenant')) {
+    for (const [f, probe] of [['0001_init.sql', 'tenant'], ['0002_gate_fx.sql', 'fx_rate'], ['0003_ai_safety.sql', 'approval_request']]) if (has(probe)) done.add(f);
+    for (const f of done) db.raw.prepare('INSERT INTO schema_migrations (file, applied_at) VALUES (?, ?)').run(f, Date.now());
+  }
   for (const f of readdirSync(dir).filter((x) => x.endsWith('.sql')).sort()) {
+    if (done.has(f)) continue;
     db.exec(readFileSync(join(dir, f), 'utf8'));
+    db.raw.prepare('INSERT INTO schema_migrations (file, applied_at) VALUES (?, ?)').run(f, Date.now());
   }
 }

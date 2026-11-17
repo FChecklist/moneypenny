@@ -40,7 +40,7 @@ export async function authenticate(ctx, headers, method, pathQuery, rawBody, rat
   await ctx.db.run('INSERT INTO rate_limit (key_id, window, n) VALUES (?,?,1) ON CONFLICT(key_id, window) DO UPDATE SET n = n + 1', keyId, win);
   await ctx.db.run('DELETE FROM rate_limit WHERE window < ?', win - 5);
   const r = await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', keyId, win);
-  const limit = await rateLimitFor(row.tenant_id);
+  const limit = await rateLimitFor(row.tenant_id, row.scope);
   if (r.n > limit) return { limited: true }; // returned (not thrown) so the counter is kept
   return { tenantId: row.tenant_id, scope: row.scope, keyId };
 }

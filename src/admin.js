@@ -11,6 +11,7 @@ import { createApiKey } from './auth.js';
 import { isVisitLike } from './wallet.js';
 import { reconcile } from './reconcile.js';
 import { processRail, expireOrders, railHealth, fxHealth } from './gate.js';
+import { expireApprovals } from './ai.js';
 
 /** Owner/CLI use only (not an API route): makes a tenant with default settings and two keys. */
 export async function createTenant(ctx, { id, name }) {
@@ -18,14 +19,15 @@ export async function createTenant(ctx, { id, name }) {
   await ctx.db.run('INSERT INTO tenant (id, name, created_at) VALUES (?,?,?)', tid, str(name, 'name', { max: 80 }), ctx.now());
   const c = { ...ctx, tenantId: tid, _settings: null };
   await seedDefaults(c);
-  await audit({ ...c, actor: 'owner-cli' }, 'tenant.create', { name });
-  const sub = { ...c, actor: 'owner-cli' };
+  await audit({ ...c, actor: 'owner-cli', callerType: 'owner' }, 'tenant.create', { name });
+  const sub = { ...c, actor: 'owner-cli', callerType: 'owner' };
   return {
     tenant_id: tid,
     api: await createApiKey(sub, { scope: 'api', label: 'product server (spend, events)' }),
     read: await createApiKey(sub, { scope: 'read', label: 'balance read-only' }),
     purchase: await createApiKey(sub, { scope: 'purchase', label: 'payment system (credit bought, money refunds)' }),
     admin: await createApiKey(sub, { scope: 'admin', label: 'tenant admin' }),
+    ai_read: await createApiKey(sub, { scope: 'ai_read', label: 'AI assistant: reads and asks only' }),
   };
 }
 
@@ -122,15 +124,16 @@ export async function sweep(ctx) {
   const lots = await expireLots(ctx);
   const rail = await processRail(ctx, ctx.rail);
   const orders = await expireOrders(ctx);
+  const approvals = await expireApprovals(ctx);
   await ctx.db.run('DELETE FROM idempotency WHERE tenant_id = ? AND created_at < ?', ctx.tenantId, ctx.now() - 30 * 86400000);
-  await audit(ctx, 'sweep', { holds, lots, rail, orders });
-  return { holds, lots, rail, orders };
+  await audit(ctx, 'sweep', { holds, lots, rail, orders, approvals });
+  return { holds, lots, rail, orders, approvals };
 }
 
 export { reconcile };
 
 export async function auditList(ctx, limit = 100) {
-  return { entries: await ctx.db.all('SELECT seq, ts, actor, action, detail FROM audit_log WHERE tenant_id = ? ORDER BY seq DESC LIMIT ?', ctx.tenantId, Math.min(Math.max(limit | 0, 1), 500)) };
+  return { entries: await ctx.db.all('SELECT seq, ts, actor, caller_type, key_id, action, detail FROM audit_log WHERE tenant_id = ? ORDER BY seq DESC LIMIT ?', ctx.tenantId, Math.min(Math.max(limit | 0, 1), 500)) };
 }
 
 export { getSettings, setSettings };

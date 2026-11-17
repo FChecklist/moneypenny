@@ -4,9 +4,9 @@ import { createApp } from '../src/api.js';
 import { seedDemo } from '../src/seed.js';
 import { createTenant } from '../src/admin.js';
 import { keySecret, signString } from '../src/auth.js';
-import { hmacHex, sha256Hex, DAY, MIN } from '../src/util.js';
+import { hmacHex, sha256Hex, DAY, MIN, HOUR } from '../src/util.js';
 
-export { DAY, MIN };
+export { DAY, MIN, HOUR };
 export const T0 = Date.UTC(2026, 10, 17, 9, 0, 0);
 
 /** Fresh in-memory app with a controllable clock and the 'demo' tenant. */
@@ -25,11 +25,12 @@ export async function setup({ other = false } = {}) {
     c.pay = makeClient(app, clock, t.purchase);
     c.read = makeClient(app, clock, t.read);
     c.admin = makeClient(app, clock, t.admin);
+    c.ai = makeClient(app, clock, t.ai_read);
     return c;
   };
   const mk = (keys) => makeClient(app, clock, keys);
   const api = mkT(demo);
-  return { db, app, clock, master, now, demo, other: b, api, admin: api.admin, pay: api.pay, read: api.read, mk, mkT, ctx: (tenantId = 'demo') => ({ db, now, master, tenantId, actor: 'test', _settings: null }) };
+  return { db, app, clock, master, now, demo, other: b, api, admin: api.admin, pay: api.pay, read: api.read, ai: api.ai, mk, mkT, ctx: (tenantId = 'demo') => ({ db, now, master, tenantId, actor: 'test', _settings: null }) };
 }
 
 let n = 0;

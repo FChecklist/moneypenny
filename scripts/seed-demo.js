@@ -20,4 +20,6 @@ console.log('Pay key id   :', out.purchase.key_id);
 console.log('Pay secret   :', out.purchase.secret);
 console.log('Admin key id :', out.admin.key_id);
 console.log('Admin secret :', out.admin.secret);
+console.log('AI key id    :', out.ai_read.key_id);
+console.log('AI secret    :', out.ai_read.secret, '(reads and asks only; a person approves)');
 console.log('Next: npm run dev   then open http://localhost:8787/admin');

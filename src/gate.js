@@ -12,6 +12,14 @@ import { emit } from './outbox.js';
 
 const MAX_ATTEMPTS = 8;
 
+const withTimeout = (p, ms) =>
+  new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error('rail_timeout')), ms);
+    Promise.resolve(p).then((v) => { clearTimeout(t); res(v); }, (e) => { clearTimeout(t); rej(e); });
+  });
+/** Rail error text is outside text: keep a short code-like string, nothing that could carry a name or address. */
+const safeError = (e) => String((e && e.code) || (e && e.message) || 'error').replace(/[^A-Za-z0-9 _.:-]/g, '?').slice(0, 80);
+
 // ---------- price list (credits, per tenant and product) ----------
 export async function setCatalogue(ctx, b) {
   const product = ref(b.product, 'product', 60);
@@ -88,12 +96,14 @@ export async function buyCredits(ctx, b) {
     if (!acc || acc.id !== prior.account_id || prior.credits !== credits || prior.currency !== cur) throw new ApiError(409, 'order_ref_used', 'That order reference was used for a different order.');
     return orderView(prior);
   }
+  const known = await findAccount(ctx, b.email);
+  if (known && known.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
   const acc = await ensureAccount(ctx, b.email, { velocity: true });
   const id = newId('ord');
   const now = ctx.now();
   await ctx.db.run(
-    "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, rate_cpu, rate_inr, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,'pending_rail',?,?)",
-    id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, s.credits_per_usd, s.inr_paise_per_usd, now, now,
+    "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'pending_rail',?,?)",
+    id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, now + s.rate_lock_minutes * MIN, s.credits_per_usd, s.inr_paise_per_usd, now, now,
   );
   await ctx.db.run('INSERT INTO rail_outbox (id, tenant_id, order_id, next_at, created_at) VALUES (?,?,?,?,?)', newId('rob'), ctx.tenantId, id, now, now);
   await processRail(ctx, ctx.rail, { orderId: id });
@@ -120,14 +130,14 @@ export async function processRail(ctx, rail, { orderId = null, limit = 25 } = {}
     }
     try {
       // The rail must treat order_id as its idempotency key: a retry must not make a second order.
-      const out = await rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits });
+      const out = await withTimeout(rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits }), 4000);
       if (!out || typeof out.rail_order_id !== 'string') throw new Error('rail gave no order id');
       await ctx.db.run("UPDATE purchase_order SET status = 'awaiting_payment', rail_order_id = ?, pay_url = ?, updated_at = ? WHERE id = ?", out.rail_order_id, typeof out.pay_url === 'string' ? out.pay_url : null, ctx.now(), o.id);
       await ctx.db.run("UPDATE rail_outbox SET status = 'sent', attempts = attempts + 1, last_error = NULL WHERE id = ?", j.id);
       sent++;
     } catch (e) {
       const attempts = j.attempts + 1;
-      const msg = String(e && e.message).slice(0, 200);
+      const msg = safeError(e);
       if (attempts >= MAX_ATTEMPTS) {
         await ctx.db.run("UPDATE rail_outbox SET status = 'dead', attempts = ?, last_error = ? WHERE id = ?", attempts, msg, j.id);
         await ctx.db.run("UPDATE purchase_order SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending_rail'", ctx.now(), o.id);
@@ -145,7 +155,7 @@ export async function processRail(ctx, rail, { orderId = null, limit = 25 } = {}
 /** Unpaid orders past their time are marked failed (a late payment is still credited, see railConfirm). */
 export async function expireOrders(ctx) {
   const s = await getSettings(ctx);
-  const r = await ctx.db.run("UPDATE purchase_order SET status = 'failed', updated_at = ? WHERE tenant_id = ? AND status = 'awaiting_payment' AND created_at + ? < ?", ctx.now(), ctx.tenantId, s.rate_lock_minutes * MIN, ctx.now());
+  const r = await ctx.db.run("UPDATE purchase_order SET status = 'failed', updated_at = ? WHERE tenant_id = ? AND status = 'awaiting_payment' AND lock_until < ?", ctx.now(), ctx.tenantId, ctx.now());
   return { expired: r.changes };
 }
 
@@ -157,8 +167,10 @@ export async function requeueDeadLetter(ctx, b) {
   const id = ref(b.id, 'id', 100);
   const j = await ctx.db.first("SELECT * FROM rail_outbox WHERE tenant_id = ? AND id = ? AND status = 'dead'", ctx.tenantId, id);
   if (!j) throw new ApiError(404, 'no_dead_letter', 'No such dead letter.');
+  const s = await getSettings(ctx);
   await ctx.db.run("UPDATE rail_outbox SET status = 'pending', attempts = 0, next_at = ?, last_error = NULL WHERE id = ?", ctx.now(), id);
-  await ctx.db.run("UPDATE purchase_order SET status = 'pending_rail', updated_at = ? WHERE id = ? AND status = 'failed' AND rail_order_id IS NULL", ctx.now(), j.order_id);
+  // a fresh start: a new rate lock window and a new unpaid-order clock
+  await ctx.db.run("UPDATE purchase_order SET status = 'pending_rail', created_at = ?, lock_until = ?, updated_at = ? WHERE id = ? AND status = 'failed' AND rail_order_id IS NULL", ctx.now(), ctx.now() + s.rate_lock_minutes * MIN, ctx.now(), j.order_id);
   await audit(ctx, 'rail.requeue', { id, order_id: j.order_id });
   return { id, status: 'pending' };
 }
@@ -186,13 +198,16 @@ export async function railConfirm(ctx, b) {
   // Inside the lock window the order's own rate and credits apply. Later, an INR payment is re-priced at today's rate
   // (the money is in, so it is never refused); it can never buy more credits than the money is worth at that rate.
   const s = await getSettings(ctx);
-  const late = ctx.now() > o.created_at + s.rate_lock_minutes * MIN;
+  const late = ctx.now() > o.lock_until; // fixed when the order was made; changing the setting later does not re-price open orders
   const repriced = late && o.currency === 'INR';
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
   const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: paid, currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr } });
-  await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, updated_at = ? WHERE id = ?", payRef, ctx.now(), o.id);
+  await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);
+  // More money than the order asked for: credits are given for the order only. The extra is flagged so the payment side can refund it.
+  const overpaid = !repriced && paid > o.amount_minor ? paid - o.amount_minor : 0;
+  if (overpaid) await emit(ctx, 'payment.overpaid', { order_id: o.id, payment_ref: payRef, overpaid_minor: overpaid, currency: o.currency });
   await ctx.db.run("UPDATE rail_outbox SET status = 'sent' WHERE order_id = ? AND status != 'sent'", o.id);
-  return { order_id: o.id, status: 'paid', credited: out.credited, ...(repriced ? { repriced: true } : {}) };
+  return { order_id: o.id, status: 'paid', credited: out.credited, ...(repriced ? { repriced: true } : {}), ...(overpaid ? { overpaid_minor: overpaid } : {}) };
 }
 
 // ---------- health ----------

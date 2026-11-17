@@ -13,7 +13,7 @@ export const DEMO_RULES = [
 
 export async function seedDemo(ctx) {
   const t = await createTenant(ctx, { id: 'demo', name: 'Demo' });
-  const c = { ...ctx, tenantId: 'demo', actor: 'owner-cli', _settings: null };
+  const c = { ...ctx, tenantId: 'demo', actor: 'owner-cli', callerType: 'owner', _settings: null };
   for (const r of DEMO_RULES) await createRule(c, r);
   await setCatalogue(c, { product: 'demo_product', item: 'sample_item', credits: 500 }); // a sample price, in credits
   return t;
