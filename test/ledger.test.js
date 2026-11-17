@@ -57,7 +57,7 @@ test('100 credits = US$1 and INR rate is a setting', async () => {
   await buy(s.api, 'a@x.com', 1250, 'p1');
   const b = await bal(s.api, 'a@x.com');
   assert.equal(b.balance, 1250);
-  assert.equal(b.display.amount, '12.50');
+  assert.equal(b.display.usd, '12.50');
   await s.admin.put('/v1/admin/settings', { inr_paise_per_usd: 7500 });
   assert.equal(creditsFromMinor(await getSettings({ ...s.ctx() }), 'INR', 7500), 100);
 });

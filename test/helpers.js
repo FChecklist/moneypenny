@@ -29,7 +29,7 @@ export async function setup({ other = false } = {}) {
   };
   const mk = (keys) => makeClient(app, clock, keys);
   const api = mkT(demo);
-  return { db, app, clock, master, now, demo, other: b, api, admin: api.admin, mk, mkT, ctx: (tenantId = 'demo') => ({ db, now, master, tenantId, actor: 'test', _settings: null }) };
+  return { db, app, clock, master, now, demo, other: b, api, admin: api.admin, pay: api.pay, read: api.read, mk, mkT, ctx: (tenantId = 'demo') => ({ db, now, master, tenantId, actor: 'test', _settings: null }) };
 }
 
 let n = 0;
@@ -57,4 +57,5 @@ export const buy = (api, email, credits, ref, extra = {}) =>
   (api.pay || api).post('/v1/credit_purchase', { email, amount: credits, paid_minor: credits, currency: 'USD', payment_ref: ref, ...extra });
 
 let ek = 0;
-export const event = (api, email, type, extra = {}) => api.post('/v1/event', { email, event_type: type, event_key: `ev-${++ek}-${Math.random()}`, ...extra });
+export const event = (api, email, type, extra = {}) =>
+  api.post('/v1/event', { email, event_type: type, event_key: `ev-${++ek}-${Math.random()}`, ...(extra.cash_minor !== undefined && extra.sale_ref === undefined ? { sale_ref: `sale-${ek}-${Math.random().toString(36).slice(2)}` } : {}), ...extra });

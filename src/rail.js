@@ -6,8 +6,20 @@
 //
 // "executed" must stay false until a person records the real payment id with mark_paid.
 
+//   rail.createOrder({ order_id, order_ref, amount_minor, currency, credits }) -> { rail_order_id, pay_url }
+//        must be safe to call twice with the same order_id (it returns the same order).
+//   rail.health() -> { ok }
+//
+// Moneypenny sits between every product and IT Services: products never call the rail themselves.
+
 export const stubRail = {
   name: 'stub',
+  async createOrder(o) {
+    return { rail_order_id: `STUB-ORD-${o.order_id}`, pay_url: `https://pay.invalid/stub/${o.order_id}` };
+  },
+  async health() {
+    return { ok: true };
+  },
   async instruct(req) {
     return { ref: `STUB-${req.request_id}`, executed: false };
   },

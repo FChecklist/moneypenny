@@ -40,7 +40,7 @@ test('hold, minimum and amount rules; request only records, never pays', async (
   s.clock.t += 7 * DAY;
   const b = await bal(s.api, 'a@x.com');
   assert.equal(b.can_convert, 2000);
-  assert.equal(b.display.convert_line, 'You can convert $20.00');
+  assert.equal(b.display.convert_line, 'You can convert 2,000 credits (US$20.00)');
   assert.equal((await conv(s.api, 1000)).body.error.code, 'below_minimum'); // min 1500
   assert.equal((await conv(s.api, 2500)).body.error.code, 'more_than_convertible');
   const ok = await conv(s.api, 1600);
@@ -72,8 +72,8 @@ test('widget shows one number and an optional convert line, and escapes everythi
   const s = await setup();
   const b = await bal(s.api, 'a@x.com');
   const html = renderBalance(b.display);
-  assert.match(html, /Credit \$/);
-  assert.match(html, /0\.00/);
+  assert.match(html, /Moneypenny Credits/);
+  assert.match(html, />0</);
   assert.ok(!html.includes('mnp-line'));
   const evil = renderBalance({ label: '<script>x</script>', amount: '1', convert_line: '"><img src=x>', theme: { name: 'office', accent: 'red' } });
   assert.ok(!evil.includes('<script>') && !evil.includes('<img'));

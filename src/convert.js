@@ -104,7 +104,8 @@ export async function conversionAction(ctx, id, action, b = {}) {
     return { id, status: 'paid' };
   }
   if (action === 'reject') {
-    if (!['requested', 'approved', 'instructed'].includes(r.status)) throw stale();
+    // once handed to a rail the money may already be moving: only a person can close it, by marking it paid
+    if (!['requested', 'approved'].includes(r.status)) throw stale();
     await setStatus(ctx, id, r.status, 'rejected');
     // credits come back as a fresh commission lot; its age is kept so the hold is not restarted
     const lotId = await createLot(ctx, { accountId: r.account_id, bucket: 'commission', amount: r.credits, source: 'reinstate', sourceRef: `cnv:${id}`, createdAt: r.created_at - s.conversion_hold_days * DAY, kind: 'reversal', meta: { conversion_rejected: id }, extRef: null });

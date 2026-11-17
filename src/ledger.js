@@ -31,8 +31,8 @@ export async function post(ctx, a) {
     lot_id: a.lotId ?? null,
     idem: ctx.idem ?? null,
     meta: a.meta ? JSON.stringify(a.meta) : null,
-    rate_cpu: s.credits_per_usd,
-    rate_inr: s.inr_paise_per_usd,
+    rate_cpu: a.rateCpu ?? s.credits_per_usd,
+    rate_inr: a.rateInr ?? s.inr_paise_per_usd,
     money_minor: a.moneyMinor ?? null,
     currency: a.currency ?? null,
     tds_minor: a.tdsMinor ?? 0,
@@ -64,7 +64,7 @@ export async function verifyChain(ctx) {
 
 /** Ledger sum must equal lots (per account and bucket). Returns mismatches (empty = healthy). */
 export async function verifyBalances(ctx) {
-  return ctx.db.all(
+  const bad = await ctx.db.all(
     `SELECT a.account_id, a.bucket, a.s AS ledger, COALESCE(l.s, 0) AS lots FROM
        (SELECT account_id, bucket, SUM(delta) s FROM entry WHERE tenant_id = ? GROUP BY account_id, bucket) a
      LEFT JOIN (SELECT account_id, bucket, SUM(remaining) s FROM lot WHERE tenant_id = ? GROUP BY account_id, bucket) l
@@ -72,4 +72,12 @@ export async function verifyBalances(ctx) {
      WHERE a.s != COALESCE(l.s, 0)`,
     ctx.tenantId, ctx.tenantId,
   );
+  // credits that exist in a lot but have no ledger entry at all
+  const orphans = await ctx.db.all(
+    `SELECT l.account_id, l.bucket, 0 AS ledger, l.s AS lots FROM
+       (SELECT account_id, bucket, SUM(remaining) s FROM lot WHERE tenant_id = ? GROUP BY account_id, bucket) l
+     WHERE l.s != 0 AND NOT EXISTS (SELECT 1 FROM entry e WHERE e.tenant_id = ? AND e.account_id = l.account_id AND e.bucket = l.bucket)`,
+    ctx.tenantId, ctx.tenantId,
+  );
+  return [...bad, ...orphans];
 }

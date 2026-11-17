@@ -10,6 +10,7 @@ import { sweepHolds } from './spend.js';
 import { createApiKey } from './auth.js';
 import { isVisitLike } from './wallet.js';
 import { reconcile } from './reconcile.js';
+import { processRail, expireOrders, railHealth, fxHealth } from './gate.js';
 
 /** Owner/CLI use only (not an API route): makes a tenant with default settings and two keys. */
 export async function createTenant(ctx, { id, name }) {
@@ -106,20 +107,24 @@ export async function freeze(ctx, b) {
 
 export async function addWebhook(ctx, b) {
   const w = await addEndpoint(ctx, str(b.url, 'url', { max: 300 }));
-  await audit(ctx, 'webhook.add', { id: w.id, url: b.url });
+  let host = '?';
+  try { host = new URL(b.url).hostname; } catch {}
+  await audit(ctx, 'webhook.add', { id: w.id, host });
   return w; // secret shown once
 }
 
 export async function health(ctx) {
-  return { chain: await verifyChain(ctx), audit: await verifyAudit(ctx), balance_mismatches: await verifyBalances(ctx) };
+  return { chain: await verifyChain(ctx), audit: await verifyAudit(ctx), balance_mismatches: await verifyBalances(ctx), rail: await railHealth(ctx), fx: await fxHealth(ctx), dead_letters: (await ctx.db.first("SELECT COUNT(*) n FROM rail_outbox WHERE tenant_id = ? AND status = 'dead'", ctx.tenantId)).n };
 }
 
 export async function sweep(ctx) {
   const holds = await sweepHolds(ctx);
   const lots = await expireLots(ctx);
+  const rail = await processRail(ctx, ctx.rail);
+  const orders = await expireOrders(ctx);
   await ctx.db.run('DELETE FROM idempotency WHERE tenant_id = ? AND created_at < ?', ctx.tenantId, ctx.now() - 30 * 86400000);
-  await audit(ctx, 'sweep', { holds, lots });
-  return { holds, lots };
+  await audit(ctx, 'sweep', { holds, lots, rail, orders });
+  return { holds, lots, rail, orders };
 }
 
 export { reconcile };

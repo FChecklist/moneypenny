@@ -1,14 +1,21 @@
 // Lots, balance, expiry, and the ways credit comes in (purchase, rule event, hand-given bonus).
 import { ApiError, DAY, newId, int, ref, str, isUniqueError, canonEmail, normEmail } from './util.js';
-import { getSettings, creditsFromMinor, fmtUsd } from './settings.js';
+import { getSettings, creditsFromMinor, fmtUsd, fmtCredits, creditsText } from './settings.js';
+import { calculate } from './convert.js';
 import { ensureAccount, findAccount, addPaid, emailOrThrow } from './accounts.js';
 import { post } from './ledger.js';
 import { emit } from './outbox.js';
 import { audit } from './audit.js';
 
 // Event names that look like plain browsing never earn credit (rule creation checks the same test).
-export const NO_CREDIT_RE = /(visit|view|login|click|browse|scroll|open|impression)/;
-export const isVisitLike = (type) => NO_CREDIT_RE.test(type);
+const VISIT_TOKEN = /^(visit|view|login|logout|click|brows|scroll|impress|pageload|pageview|heartbeat|session|ping|load|pv)/;
+const VISIT_EXACT = new Set(['open', 'opens', 'hit', 'hits', 'seen']);
+export const NO_CREDIT_RE = /(visit|pageview|impression|login|click|scroll|browse)/;
+/** Token match (case-insensitive) so "review_posted" or "account_opened" are not caught, but "page_viewed" is. */
+export const isVisitLike = (type) => {
+  const t = String(type).toLowerCase();
+  return NO_CREDIT_RE.test(t) || t.split(/[^a-z0-9]+/).some((w) => VISIT_TOKEN.test(w) || VISIT_EXACT.has(w));
+};
 
 const expiryFor = (s, bucket, now, override) => {
   const d = override ?? s[`${bucket}_expiry_days`];
@@ -29,7 +36,7 @@ export async function createLot(ctx, a) {
     if (isUniqueError(e)) throw new ApiError(409, 'duplicate_ref', 'That reference was already used.');
     throw e;
   }
-  await post(ctx, { accountId: a.accountId, bucket: a.bucket, delta: a.amount, kind: a.kind, ref: a.sourceRef ?? null, lotId: id, meta: a.meta, moneyMinor: a.paidMinor, currency: a.currency, extRef: a.extRef });
+  await post(ctx, { accountId: a.accountId, bucket: a.bucket, delta: a.amount, kind: a.kind, ref: a.sourceRef ?? null, lotId: id, meta: a.meta, moneyMinor: a.paidMinor, currency: a.currency, extRef: a.extRef, rateCpu: a.rateCpu, rateInr: a.rateInr });
   return id;
 }
 
@@ -56,16 +63,22 @@ export async function getBalance(ctx, email, { details = false } = {}) {
       }
       if (l.expires_at != null && (next == null || l.expires_at < next)) next = l.expires_at;
     }
-    r = { balance, can_convert: convertible && convert >= s.conversion_min_credits ? convert : 0, settling, next_expiry: next };
+    const net = convertible && acc.status !== 'frozen' && convert >= s.conversion_min_credits ? calculate(s, convert).net_minor : 0;
+    r = { balance, can_convert: net > 0 ? convert : 0, settling, next_expiry: next };
   }
   const out = {
     ...r,
     conversion_enabled: !!s.conversion_enabled,
+    fx_stale: s.fx_state === 'stale',
     display: {
-      label: s.unit_name,
-      amount: fmtUsd(s, r.balance),
-      convert_line: r.can_convert > 0 ? s.wording_convert_line.replace('{amount}', `$${fmtUsd(s, r.can_convert)}`) : null,
-      settling_line: r.settling > 0 ? s.wording_settling_line.replace('{amount}', `$${fmtUsd(s, r.settling)}`) : null,
+      label: s.currency_name,
+      symbol: s.unit_symbol,
+      unit: s.unit_label,
+      credits: r.balance,
+      amount: fmtCredits(r.balance),
+      usd: fmtUsd(s, r.balance),
+      convert_line: r.can_convert > 0 ? s.wording_convert_line.replace('{amount}', creditsText(s, r.can_convert)) : null,
+      settling_line: r.settling > 0 ? s.wording_settling_line.replace('{amount}', creditsText(s, r.settling)) : null,
       theme: s.theme_enabled ? { name: s.theme_name, accent: s.theme_accent } : null,
     },
   };
@@ -100,17 +113,18 @@ export async function claimPaymentRef(ctx, refId, kind) {
 
 // ---------- credit in: purchase ----------
 /** Bought credits, only against a verified real payment (payment_ref is the IT Services / Razorpay payment id). */
-export async function creditPurchase(ctx, b) {
-  const s = await getSettings(ctx);
+export async function creditPurchase(ctx, b, { lock = null } = {}) {
+  let s = await getSettings(ctx);
+  if (lock) s = { ...s, credits_per_usd: lock.rateCpu, inr_paise_per_usd: lock.rateInr }; // an order keeps the rate it was made at
   const amount = int(b.amount, 'amount', { min: 1, max: 100000000 });
   const paidMinor = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
   const currency = b.currency;
   const payRef = ref(b.payment_ref, 'payment_ref');
   if (creditsFromMinor(s, currency, paidMinor) < amount) throw new ApiError(422, 'amount_exceeds_payment', 'More credits than the payment covers.');
+  // A paused account may still be credited: the money has already been taken, so the credits must exist.
   const acc = await ensureAccount(ctx, b.email);
-  if (acc.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
   await claimPaymentRef(ctx, payRef, 'purchase');
-  const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bought', amount, source: 'purchase', sourceRef: payRef, origin: payRef, expiresAt: expiryFor(s, 'bought', ctx.now()), paidMinor, currency, kind: 'purchase', extRef: payRef });
+  const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bought', amount, source: 'purchase', sourceRef: payRef, origin: payRef, expiresAt: expiryFor(s, 'bought', ctx.now()), paidMinor, currency, kind: 'purchase', extRef: payRef, ...(lock || {}) });
   await addPaid(ctx, acc.id, amount);
   await emit(ctx, 'credit.added', { account_id: acc.id, bucket: 'bought', amount, ref: payRef, lot_id: lotId });
   return { lot_id: lotId, account_id: acc.id, credited: amount };
@@ -162,14 +176,22 @@ export async function processEvent(ctx, b) {
   if (rule.bucket === 'commission' && rule.amount_type !== 'pct_cash_bps') return reject(ctx, ev, 'rule_invalid', rb);
 
   let amount = rule.amount;
+  let saleRef = null;
   if (rule.amount_type === 'pct_cash_bps') {
     const payer = normEmail(b.payer_email);
     if (!payer) return reject(ctx, ev, 'payer_required', rb);
     if (canonEmail(payer) === canon) return reject(ctx, ev, 'self_referral', rb);
-    if (!Number.isInteger(b.cash_minor) || b.cash_minor <= 0) return reject(ctx, ev, 'no_cash_no_commission', rb);
+    if (!Number.isInteger(b.cash_minor) || b.cash_minor <= 0 || b.cash_minor > 100000000000) return reject(ctx, ev, 'no_cash_no_commission', rb);
+    // The sale itself must be named (the real payment id), and each sale can pay commission once per tenant.
+    if (typeof b.sale_ref !== 'string' || !/^[A-Za-z0-9._:/=+-]{1,100}$/.test(b.sale_ref)) return reject(ctx, ev, 'sale_ref_required', rb);
+    saleRef = b.sale_ref;
+    if (await ctx.db.first('SELECT 1 x FROM payment_ref WHERE tenant_id = ? AND ref = ?', ctx.tenantId, `sale:${saleRef}`)) return reject(ctx, ev, 'sale_already_used', rb);
     const cash = creditsFromMinor(s, b.currency, b.cash_minor);
     amount = Math.floor((cash * rule.amount) / 10000);
     if (amount < 1) return reject(ctx, ev, 'amount_zero', rb);
+    if (amount > s.commission_max_per_event) return reject(ctx, ev, 'over_event_limit', rb);
+    const dayTotal = await ctx.db.first("SELECT COALESCE(SUM(granted),0) g FROM event_in WHERE tenant_id = ? AND bucket = 'commission' AND created_at > ?", ctx.tenantId, ctx.now() - DAY);
+    if (dayTotal.g + amount > s.commission_daily_cap) return reject(ctx, ev, 'daily_cap_reached', rb);
   }
 
   const used = (extra, ...p) =>
@@ -184,10 +206,11 @@ export async function processEvent(ctx, b) {
   const acc = await ensureAccount(ctx, email, { velocity: true });
   if (acc.status === 'frozen') return reject(ctx, ev, 'account_frozen', { ...rb, accountId: acc.id });
   const eligibleAt = rule.bucket === 'commission' ? ctx.now() + s.commission_hold_days * DAY : 0;
+  if (saleRef) await claimPaymentRef(ctx, `sale:${saleRef}`, 'sale');
   const lotId = await createLot(ctx, {
     accountId: acc.id, bucket: rule.bucket, amount, source: 'rule', sourceRef: key, ruleId: rule.id,
     expiresAt: expiryFor(s, rule.bucket, ctx.now(), rule.expiry_days), eligibleAt, kind: rule.bucket, meta: { event_type: type },
-    ...(rule.bucket === 'commission' ? { paidMinor: b.cash_minor, currency: b.currency } : {}),
+    ...(rule.bucket === 'commission' ? { paidMinor: b.cash_minor, currency: b.currency, origin: `sale:${saleRef}`, extRef: saleRef } : {}),
   });
   await insertEvent(ctx, { ...ev, accountId: acc.id, ruleId: rule.id, bucket: rule.bucket, granted: amount, outcome: 'granted' });
   await emit(ctx, 'credit.added', { account_id: acc.id, bucket: rule.bucket, amount, ref: key, lot_id: lotId });

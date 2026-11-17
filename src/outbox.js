@@ -18,11 +18,14 @@ export async function addEndpoint(ctx, url) {
   } catch {
     throw new ApiError(400, 'bad_url', 'Webhook address is not valid.');
   }
+  if (u.username || u.password) throw new ApiError(400, 'bad_url', 'Webhook address must not carry a user name or password.');
+  const h = u.hostname.replace(/\.+$/, '').toLowerCase(); // "example.com." is the same host as "example.com"
   const local = u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) throw new ApiError(400, 'bad_url', 'Webhook address must be https.');
+  if (u.protocol !== 'https:' && !local) throw new ApiError(400, 'bad_url', 'Webhook address must be https.');
   // never aim a server-side call at private or internal addresses (localhost http stays allowed for local development)
-  const h = u.hostname;
-  if (!local && (/^\d+\.\d+\.\d+\.\d+$/.test(h) || h.startsWith('[') || /(^|\.)(local|internal|localhost|lan|home|corp)$/.test(h) || !h.includes('.'))) throw new ApiError(400, 'bad_url', 'Webhook address must be a public host name.');
+  // The sender that really makes the call must ALSO check the resolved IP address (a name can point inside).
+  const blockedName = /(^|\.)(local|internal|lan|home|corp|intranet|private|localdomain|localhost)$/.test(h) || /^localhost(\.|$)/.test(h) || /(^|\.)(nip\.io|sslip\.io|xip\.io|localtest\.me|lvh\.me|metadata\.google\.internal)$/.test(h);
+  if (!local && (/^\d+\.\d+\.\d+\.\d+$/.test(h) || h.startsWith('[') || h.includes(':') || blockedName || !h.includes('.'))) throw new ApiError(400, 'bad_url', 'Webhook address must be a public host name.');
   const id = newId('whk');
   await ctx.db.run('INSERT INTO webhook_endpoint (id, tenant_id, url, created_at) VALUES (?,?,?,?)', id, ctx.tenantId, url, ctx.now());
   return { id, secret: await webhookSecret(ctx.master, id) };

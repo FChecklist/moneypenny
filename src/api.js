@@ -3,11 +3,13 @@ import { ApiError, sha256Hex } from './util.js';
 import { authenticate } from './auth.js';
 import { getSettings } from './settings.js';
 import { getBalance, creditPurchase, creditManualBonus, processEvent, history } from './wallet.js';
-import { reserve, capture, release, refund, sweepHolds } from './spend.js';
+import { reserve, reserveItem, capture, release, refund, sweepHolds } from './spend.js';
+import { buyCredits, railConfirm, quote, setCatalogue, listCatalogue, listDeadLetters, requeueDeadLetter, processRail, railHealth, fxHealth } from './gate.js';
 import { convertRequest, conversionAction, listConversions } from './convert.js';
 import * as admin from './admin.js';
 import { adminPage } from './admin-page.js';
 import { stubRail } from './rail.js';
+import { currentRate } from './fx.js';
 
 const MAX_BODY = 65536;
 
@@ -17,7 +19,12 @@ const MAX_BODY = 65536;
 //  purchase = the payment system (credit bought, money refunds, chargebacks)
 //  admin    = tenant admin
 const ROUTES = [
-  ['GET', '/v1/balance', ['api', 'read'], false, (c, b, q) => getBalance(c, q.get('email'), { details: q.get('details') === '1' && c.scope === 'api' })],
+  ['GET', '/v1/balance', ['api', 'read'], false, (c, b, q) => balanceWithCache(c, q.get('email'), q.get('details') === '1' && c.scope === 'api')],
+  ['GET', '/v1/quote', ['api', 'read'], false, (c, b, q) => quote(c, intParam(q, 'credits', 0), q.get('currency'))],
+  ['GET', '/v1/catalogue', ['api', 'read'], false, (c, b, q) => listCatalogue(c, q.get('product'), { activeOnly: true })],
+  ['POST', '/v1/buy_credits', ['api'], true, (c, b) => buyCredits(c, b)],
+  ['POST', '/v1/rail/confirm', ['purchase'], true, (c, b) => railConfirm(c, b)],
+  ['POST', '/v1/spend/reserve_item', ['api'], true, async (c, b) => { await sweepHolds(c); return reserveItem(c, b); }],
   ['POST', '/v1/credit_purchase', ['purchase'], true, (c, b) => creditPurchase(c, b)],
   ['POST', '/v1/credit', ['api'], true, (c, b) => creditBonus(c, b)],
   ['POST', '/v1/event', ['api'], true, (c, b) => processEvent(c, b)],
@@ -31,6 +38,11 @@ const ROUTES = [
   ['PUT', '/v1/admin/settings', ['admin'], true, (c, b) => admin.setSettings(c, b).then((s) => ({ settings: s }))],
   ['GET', '/v1/admin/rules', ['admin'], false, (c) => admin.listRules(c)],
   ['POST', '/v1/admin/rules', ['admin'], true, (c, b) => admin.createRule(c, b)],
+  ['GET', '/v1/admin/catalogue', ['admin'], false, (c, b, q) => listCatalogue(c, q.get('product'))],
+  ['PUT', '/v1/admin/catalogue', ['admin'], true, (c, b) => setCatalogue(c, b)],
+  ['GET', '/v1/admin/dead_letters', ['admin'], false, (c) => listDeadLetters(c)],
+  ['POST', '/v1/admin/dead_letters/requeue', ['admin'], true, (c, b) => requeueDeadLetter(c, b)],
+  ['POST', '/v1/admin/rail/process', ['admin'], true, (c) => processRail(c, c.rail)],
   ['GET', '/v1/admin/audit', ['admin'], false, (c, b, q) => admin.auditList(c, intParam(q, 'limit', 100))],
   ['GET', '/v1/admin/health', ['admin'], false, (c) => admin.health(c)],
   ['GET', '/v1/admin/reconcile', ['admin'], false, (c) => admin.reconcile(c)],
@@ -45,6 +57,23 @@ function intParam(q, name, def) {
   if (raw == null) return def;
   if (!/^\d{1,15}$/.test(raw)) throw new ApiError(400, 'bad_request', `${name} must be a whole number`);
   return Number(raw);
+}
+
+// Balance with a degraded-mode cache: if the database cannot answer, a balance seen a moment ago is
+// still shown, clearly marked. (Signing in still needs the database; see README.)
+async function balanceWithCache(c, email, details) {
+  const s = await getSettings(c);
+  const key = `${c.tenantId}|${String(email).trim().toLowerCase()}|${details ? 1 : 0}`;
+  try {
+    const out = await getBalance(c, email, { details });
+    if (c.cache && s.read_cache_max_age_seconds > 0) { if (c.cache.size > 5000) c.cache.clear(); c.cache.set(key, { at: c.now(), out }); }
+    return out;
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    const hit = c.cache && c.cache.get(key);
+    if (hit && c.now() - hit.at <= s.read_cache_max_age_seconds * 1000) return { ...hit.out, degraded: true, as_of: hit.at };
+    throw e;
+  }
 }
 
 // Bonus by hand only. Bought credit comes only through /v1/credit_purchase (the payment system's key).
@@ -62,7 +91,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail }) {
   async function fetch(request) {
     try {
       const url = new URL(request.url);
-      if (request.method === 'GET' && url.pathname === '/health') return json(200, { ok: true });
+      if (request.method === 'GET' && url.pathname === '/health') return healthReport();
       if (request.method === 'GET' && url.pathname === '/admin') {
         return new Response(adminPage(), { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'", 'x-frame-options': 'DENY' } });
       }
@@ -99,12 +128,15 @@ export function createApp({ db, master, now = Date.now, rail = stubRail }) {
       }
       let idem = request.headers.get('idempotency-key');
       // credit bought: the real payment id IS the idempotency key unless the caller sends its own
-      if (!idem && route[1] === '/v1/credit_purchase' && typeof body.payment_ref === 'string') idem = `pay:${body.payment_ref}`;
+      const payRoute = route[1] === '/v1/credit_purchase' || route[1] === '/v1/rail/confirm';
+      if (!idem && payRoute && typeof body.payment_ref === 'string') idem = `pay:${body.payment_ref}`;
+      // "pay:" keys belong to real payments only: no other route may use that namespace, and a payment route may only use its own id
+      if (idem && idem.startsWith('pay:') && !(payRoute && idem === `pay:${body.payment_ref}`)) throw new ApiError(400, 'bad_idempotency_key', 'Keys starting with "pay:" are reserved for payment ids.');
       if (route[3] && (!idem || idem.length > 120)) throw new ApiError(400, 'idempotency_key_required', 'Send an Idempotency-Key header (up to 120 characters).');
 
       // 2) the work, all or nothing
       const out = await db.tx(async (t) => {
-        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, scope: auth.scope, actor: auth.keyId, idem: idem || null, _settings: null };
+        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, cache: app.cache, scope: auth.scope, actor: auth.keyId, idem: idem || null, _settings: null };
         let reqHash = null;
         if (route[3]) {
           reqHash = await sha256Hex(`${method}\n${pathQuery}\n${raw}`);
@@ -127,6 +159,27 @@ export function createApp({ db, master, now = Date.now, rail = stubRail }) {
     }
   }
 
-  const app = { fetch, db, master, now, rail };
+  async function healthReport() {
+    // No tenant data here, only whether the parts work.
+    const out = { ok: true, db: false, rail: { name: app.rail?.name ?? 'none', ok: false }, fx: null, outbox: null };
+    try {
+      await db.first('SELECT 1 x');
+      out.db = true;
+      const c = { db, now, tenantId: null, rail: app.rail };
+      out.rail = await railHealth(c);
+      const r = await currentRate(c, 'INR', 72);
+      out.fx = { state: r.state, as_of: r.as_of ? new Date(r.as_of).toISOString() : null };
+      const dead = await db.first("SELECT COUNT(*) n FROM rail_outbox WHERE status = 'dead'");
+      const pend = await db.first("SELECT COUNT(*) n FROM rail_outbox WHERE status = 'pending'");
+      const wh = await db.first("SELECT COUNT(*) n FROM outbox WHERE status = 'pending'");
+      out.outbox = { rail_pending: pend.n, rail_dead: dead.n, webhooks_pending: wh.n };
+      out.ok = out.rail.ok && dead.n === 0 && r.state !== 'stale';
+    } catch {
+      out.ok = false;
+    }
+    return json(out.db ? 200 : 503, out);
+  }
+
+  const app = { fetch, db, master, now, rail, cache: new Map() };
   return app;
 }

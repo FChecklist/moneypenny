@@ -1,7 +1,7 @@
 # Corporate Moneypenny
 
-A small ledger that keeps **Credit $** for people: what they have, what they spent, what they earned.
-100 credits = US$1. One balance on screen. Phase 0: runs on this laptop only. Nothing is live.
+A small ledger that keeps **Moneypenny Credits** for people: what they have, what they spent, what they earned.
+The currency name, unit word and symbol are tenant settings (default "Moneypenny Credits", "credits", "MC"). 100 credits = US$1 (also a setting). One balance on screen. Phase 0: runs on this laptop only. Nothing is live.
 
 **Status:** local build. Not deployed. No payments, no cash-out, no real accounts.
 The public name is one setting (`product_name`). The code name is MNP.
@@ -17,6 +17,8 @@ The public name is one setting (`product_name`). The code name is MNP.
 - **Safe by design:** every write has an idempotency key; every call is signed and cannot be replayed; the ledger is append-only and hash-chained; every setting change is in an audit log.
 - **Cash conversion is OFF.** A skeleton engine can calculate and record a request (hold, minimum, approval, TDS). Real money stays behind a payment-rail adapter; the only one shipped is a stub that moves nothing.
 - **Complete register:** each entry records its kind, the exchange rate at that moment, real-money value, TDS/GST fields, status and the outside payment id. `npm run reconcile` shows the credits still owed.
+- **The single gate.** Products price and spend only in credits and call only this service. A price list (catalogue) holds each item's price in credits; `reserve_item` takes the credits all-or-nothing (no cash part). To buy credits a product calls `buy_credits`; this service asks the payment rail (IT Services) for an order through an adapter, and credits arrive only when the rail confirms the payment. Rail calls wait in an outbox, retry with back-off, and become dead letters a person can requeue. `/health` shows db, rail, rates and queue counts. If the database cannot read lots, a recently seen balance is still served, marked `degraded`.
+- **Daily exchange rates.** An append-only `fx_rate` table (rate per US$, fixed for each UTC day, margin per tenant, jump check with approval, last-good fallback with a maximum age). An order keeps the rate it was made at. Payment is only in INR or USD; other currencies are display-only. No network is used here: the rate source is a stub (`npm run fx -- refresh`).
 - **Stands alone.** It knows only tenants, accounts, credits, buckets, rules and holds. Games and other products are just API clients; there is no end-user login or page.
 
 ## Try it (Node 22.5 or newer; one light process)
@@ -34,6 +36,7 @@ npm run dev       # then open http://localhost:8787/admin and paste the admin ke
 |---|---|
 | `src/wallet.js` | balance, expiry, buying credit, earning events |
 | `src/spend.js` | reserve / capture / release, refunds, chargeback |
+| `src/gate.js`, `src/fx.js` | price list, buy credits, rail outbox, quotes; daily rates |
 | `src/convert.js`, `src/rail.js` | conversion engine skeleton and the payment-rail stub |
 | `src/reconcile.js` | credits-owed views |
 | `src/ledger.js` | append-only hash-chained entries and integrity checks |
@@ -47,7 +50,7 @@ Docs: [API.md](API.md), [RULES.md](RULES.md), [OWNER-DECISIONS.md](OWNER-DECISIO
 
 ## Deliberately not here yet
 
-Live hosting (the D1 atomic executor is a Phase 1 job, see `src/d1.js`), real payments, cash-out, e-mail verification (callers must only send verified e-mails), warning e-mails before credits end, the Partner Circle link, the IT Services link.
+Live hosting, a real rail and a real rate source (adapters are stubs; rail calls run inside the database step, so a real rail must be idempotent by `order_id`), a degraded cache that survives a full database outage (signing in still needs the database), live hosting (the D1 atomic executor is a Phase 1 job, see `src/d1.js`), real payments, cash-out, e-mail verification (callers must only send verified e-mails), warning e-mails before credits end, the Partner Circle link, the IT Services link.
 
 ## Public repo note
 

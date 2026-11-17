@@ -31,7 +31,10 @@ function allocate(lots, limit, bonusCap, canUseBonus) {
 const sum = (parts) => parts.reduce((a, p) => a + p.take, 0);
 
 const isReversed = async (ctx, origin) =>
-  origin != null && !!(await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, origin));
+  origin != null && !!(await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, origin.replace(/^sale:/, '')));
+
+/** Locked rates of an order, passed to every entry written for it. */
+const lockOf = (h) => (h.rate_inr ? { rateCpu: h.rate_cpu, rateInr: h.rate_inr } : {});
 
 export async function reserve(ctx, b) {
   const s = await getSettings(ctx);
@@ -39,6 +42,7 @@ export async function reserve(ctx, b) {
   const orderMinor = int(b.amount_minor, 'amount_minor', { min: 1, max: 100000000000 });
   const cur = b.currency;
   const orderCredits = creditsFromMinor(s, cur, orderMinor); // also validates currency
+  if (cur === 'INR' && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly or pay in USD.');
   const none = (reason) => ({ hold_id: null, credit_applied: 0, credit_value_minor: 0, cash_due_minor: orderMinor, reason });
 
   const acc = await findAccount(ctx, b.email);
@@ -76,11 +80,18 @@ export async function reserve(ctx, b) {
   }
   if (credits === 0) return none('nothing_spendable');
 
+  const { holdId, expiresAt } = await placeHold(ctx, s, acc, parts, { orderRef, orderMinor, cur, credits, cashDue });
+  return { hold_id: holdId, credit_applied: credits, credit_value_minor: orderMinor - cashDue, cash_due_minor: cashDue, expires_at: expiresAt, reason: 'ok' };
+}
+
+/** Writes the hold, takes the credits out of their lots, and locks the rates in force right now. */
+async function placeHold(ctx, s, acc, parts, h) {
+  const now = ctx.now();
   const holdId = newId('hold');
   const expiresAt = now + s.hold_minutes * MIN;
   await ctx.db.run(
-    "INSERT INTO hold (id, tenant_id, account_id, order_ref, order_minor, currency, credits, credit_value_minor, cash_due_minor, status, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,'held',?,?)",
-    holdId, ctx.tenantId, acc.id, orderRef, orderMinor, cur, credits, orderMinor - cashDue, cashDue, now, expiresAt,
+    "INSERT INTO hold (id, tenant_id, account_id, order_ref, order_minor, currency, credits, credit_value_minor, cash_due_minor, status, created_at, expires_at, rate_cpu, rate_inr, product, item) VALUES (?,?,?,?,?,?,?,?,?,'held',?,?,?,?,?,?)",
+    holdId, ctx.tenantId, acc.id, h.orderRef, h.orderMinor, h.cur, h.credits, h.orderMinor - h.cashDue, h.cashDue, now, expiresAt, s.credits_per_usd, s.inr_paise_per_usd, h.product ?? null, h.item ?? null,
   );
   for (const p of parts) {
     const r = await ctx.db.run('UPDATE lot SET remaining = remaining - ? WHERE id = ? AND remaining >= ?', p.take, p.lot.id, p.take);
@@ -88,7 +99,38 @@ export async function reserve(ctx, b) {
     await ctx.db.run('INSERT INTO hold_part (hold_id, lot_id, bucket, amount) VALUES (?,?,?,?)', holdId, p.lot.id, p.lot.bucket, p.take);
     await post(ctx, { accountId: acc.id, bucket: p.lot.bucket, delta: -p.take, kind: 'hold', ref: holdId, lotId: p.lot.id, status: 'pending' });
   }
-  return { hold_id: holdId, credit_applied: credits, credit_value_minor: orderMinor - cashDue, cash_due_minor: cashDue, expires_at: expiresAt, reason: 'ok' };
+  return { holdId, expiresAt };
+}
+
+/**
+ * Spend by price list: the item costs a fixed number of credits, nothing else. All or nothing:
+ * not enough usable credits means 402 and the shortfall, never a part-payment in cash.
+ */
+export async function reserveItem(ctx, b) {
+  const s = await getSettings(ctx);
+  const orderRef = ref(b.order_ref, 'order_ref');
+  const product = ref(b.product, 'product', 60);
+  const item = ref(b.item, 'item', 60);
+  const cat = await ctx.db.first('SELECT * FROM catalogue_item WHERE tenant_id = ? AND product = ? AND item = ? AND active = 1', ctx.tenantId, product, item);
+  if (!cat) throw new ApiError(404, 'no_item', 'No such item on the price list.');
+  if (b.credits != null && b.credits !== cat.credits) throw new ApiError(409, 'price_changed', 'The price has changed.', { price_credits: cat.credits });
+  const need = cat.credits;
+  const acc = await findAccount(ctx, b.email);
+  if (acc && acc.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
+  const open = await ctx.db.first("SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'held'", ctx.tenantId, orderRef);
+  if (open) throw new ApiError(409, 'order_has_open_hold', 'This order already has a hold. Capture or release it first.');
+  const done = await ctx.db.first("SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'captured'", ctx.tenantId, orderRef);
+  if (done) throw new ApiError(409, 'order_already_paid_with_credits', 'This order was already completed.');
+  const now = ctx.now();
+  const lots = acc
+    ? await ctx.db.all('SELECT * FROM lot WHERE tenant_id = ? AND account_id = ? AND remaining > 0 AND (expires_at IS NULL OR expires_at > ?) AND eligible_at <= ?', ctx.tenantId, acc.id, now, now)
+    : [];
+  const canUseBonus = acc ? !s.bonus_needs_paid || acc.paid_credits >= s.bonus_unlock_min_credits : false;
+  const parts = allocate(lots, need, Math.floor((need * s.bonus_max_order_pct) / 100), canUseBonus);
+  const have = sum(parts);
+  if (have < need) throw new ApiError(402, 'insufficient_credits', 'Not enough credits for this.', { price_credits: need, usable_credits: have, short_by: need - have });
+  const { holdId, expiresAt } = await placeHold(ctx, s, acc, parts, { orderRef, orderMinor: 0, cur: 'CRD', credits: need, cashDue: 0, product, item });
+  return { hold_id: holdId, credits: need, product, item, expires_at: expiresAt };
 }
 
 async function loadHold(ctx, id) {
@@ -116,10 +158,11 @@ export async function capture(ctx, b) {
   }
   const r = await ctx.db.run("UPDATE hold SET status = 'captured', closed_at = ?, payment_ref = ? WHERE id = ? AND status = 'held'", ctx.now(), payRef, h.id);
   if (r.changes !== 1) throw new ApiError(409, 'hold_closed', 'This hold is no longer open.');
-  for (const p of parts) await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: 0, kind: 'capture', ref: h.id, lotId: p.lot_id, meta: { amount: p.amount } });
+  const lock = lockOf(h);
+  for (const p of parts) await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: 0, kind: 'capture', ref: h.id, lotId: p.lot_id, meta: { amount: p.amount }, ...lock });
   if (h.cash_due_minor > 0) {
-    await post(ctx, { accountId: h.account_id, bucket: '-', delta: 0, kind: 'collection', ref: h.id, moneyMinor: h.cash_due_minor, currency: h.currency, extRef: payRef });
-    await addPaid(ctx, h.account_id, creditsFromMinor(s, h.currency, h.cash_due_minor));
+    await post(ctx, { accountId: h.account_id, bucket: '-', delta: 0, kind: 'collection', ref: h.id, moneyMinor: h.cash_due_minor, currency: h.currency, extRef: payRef, ...lock });
+    await addPaid(ctx, h.account_id, creditsFromMinor(h.rate_inr ? { ...s, credits_per_usd: h.rate_cpu, inr_paise_per_usd: h.rate_inr } : s, h.currency, h.cash_due_minor));
   }
   await emit(ctx, 'spend.captured', { hold_id: h.id, account_id: h.account_id, order_ref: h.order_ref, credit_applied: h.credits, cash_due_minor: h.cash_due_minor, payment_ref: payRef });
   return { hold_id: h.id, status: 'captured', credit_applied: h.credits, cash_due_minor: h.cash_due_minor };
@@ -177,6 +220,7 @@ async function refundOrder(ctx, b) {
   const h = await loadHold(ctx, b.hold_id);
   if (h.status !== 'captured') throw new ApiError(409, 'hold_not_captured', 'Only a completed order can be returned.');
   const left = h.credits - h.refunded_credits;
+  if (left <= 0) throw new ApiError(409, 'nothing_to_return', 'Everything on this order was already returned.');
   const want = b.credits == null ? left : int(b.credits, 'credits', { min: 1 });
   if (want > left) throw new ApiError(409, 'more_than_spent', `Only ${left} credits can still be returned for this order.`);
   const parts = (await partsOf(ctx, h.id)).sort((a, c) => a.bucket.localeCompare(c.bucket));
@@ -235,17 +279,25 @@ async function refundPurchase(ctx, b) {
  */
 async function chargeback(ctx, b) {
   const payRef = ref(b.payment_ref, 'payment_ref');
+  // The payment may have bought credits, or it may be the sale that earned a commission (or both ids may never have been seen).
   const lot = await ctx.db.first("SELECT * FROM lot WHERE tenant_id = ? AND source = 'purchase' AND source_ref = ?", ctx.tenantId, payRef);
-  if (!lot) throw new ApiError(404, 'no_purchase', 'No such purchase.');
+  const sale = await ctx.db.first('SELECT 1 x FROM payment_ref WHERE tenant_id = ? AND ref = ?', ctx.tenantId, `sale:${payRef}`);
+  if (!lot && !sale) throw new ApiError(404, 'no_purchase', 'No such purchase or sale.');
   const seen = await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, payRef);
-  if (seen) return { removed_credits: 0, account_status: 'frozen', already: true };
+  if (seen) return { removed_credits: 0, account_status: lot ? 'frozen' : 'unchanged', already: true };
   await ctx.db.run('INSERT INTO charged_back (tenant_id, payment_ref, created_at) VALUES (?,?,?)', ctx.tenantId, payRef, ctx.now());
-  const family = await ctx.db.all('SELECT * FROM lot WHERE tenant_id = ? AND origin = ? AND remaining > 0', ctx.tenantId, payRef);
+  const family = await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND (origin = ? OR origin = ?) AND remaining > 0", ctx.tenantId, payRef, `sale:${payRef}`);
   let removed = 0;
   for (const l of family) {
     await ctx.db.run('UPDATE lot SET remaining = 0 WHERE id = ?', l.id);
     await post(ctx, { accountId: l.account_id, bucket: l.bucket, delta: -l.remaining, kind: 'reversal', ref: payRef, lotId: l.id, extRef: payRef, status: 'reversed' });
     removed += l.remaining;
+  }
+  if (!lot) {
+    // a sale was taken back: the commission it earned goes, the earner is not paused
+    await audit(ctx, 'sale.chargeback', { payment_ref: payRef, removed_credits: removed });
+    await emit(ctx, 'commission.reversed', { payment_ref: payRef, removed_credits: removed });
+    return { removed_credits: removed, account_status: 'unchanged' };
   }
   await addPaid(ctx, lot.account_id, -(lot.original - lot.refunded_credits));
   await ctx.db.run("UPDATE account SET status = 'frozen' WHERE id = ?", lot.account_id);

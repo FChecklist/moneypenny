@@ -11,7 +11,8 @@
     "dev": "node scripts/dev-server.js",
     "reconcile": "node scripts/reconcile.js",
     "scan": "node scripts/scan-words.js",
-    "rules-doc": "node scripts/gen-rules.js"
+    "rules-doc": "node scripts/gen-rules.js",
+    "fx": "node scripts/fx.js"
   },
   "engines": { "node": ">=22.5" }
 }

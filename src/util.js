@@ -51,7 +51,8 @@ export function normEmail(e) {
 export function canonEmail(norm) {
   let [local, domain] = norm.split('@');
   if (domain === 'googlemail.com') domain = 'gmail.com';
-  local = local.split('+')[0];
+  const base = local.split('+')[0];
+  if (base) local = base;
   if (domain === 'gmail.com') local = local.replaceAll('.', '');
   return `${local}@${domain}`;
 }
@@ -74,6 +75,6 @@ export function str(v, name, { max = 200, optional = false } = {}) {
 /** A reference id from a product. No spaces and no "@", so an e-mail can never ride along into events. */
 export function ref(v, name, max = 100) {
   const s = str(v, name, { max });
-  if (/[\s@]/.test(s)) throw new ApiError(400, 'bad_request', `${name} must not contain spaces or "@"`);
+  if (!/^[A-Za-z0-9._:/=+-]+$/.test(s)) throw new ApiError(400, 'bad_request', `${name} may use letters, digits and . _ : / = + - only`);
   return s;
 }

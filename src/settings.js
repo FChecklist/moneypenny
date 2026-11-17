@@ -2,12 +2,24 @@
 // the starting template copied to a new tenant; the engine reads the database.
 import { ApiError } from './util.js';
 import { audit } from './audit.js';
+import { currentRate } from './fx.js';
 
 export const SCHEMA = {
   product_name: { type: 'str', def: 'Corporate Moneypenny', doc: 'Public product name shown to people.' },
-  unit_name: { type: 'str', def: 'Credit $', doc: 'Name of the credit unit.' },
+  currency_name: { type: 'str', def: 'Moneypenny Credits', doc: 'Name of the credit currency shown to people (a tenant can rename it).' },
+  unit_label: { type: 'str', def: 'credits', doc: 'Word used after a number of credits.' },
+  unit_symbol: { type: 'str', def: 'MC', doc: 'Short symbol for the currency. It is never a dollar sign.' },
   credits_per_usd: { type: 'int', def: 100, min: 1, max: 100000, doc: 'Credits per US$1 (100 = one credit is one cent).' },
-  inr_paise_per_usd: { type: 'int', def: 7000, min: 100, max: 1000000, doc: 'Paise per US$1 (7000 = Rs 70). Owner sets the real figure.' },
+  inr_paise_per_usd: { type: 'int', def: 7000, min: 100, max: 1000000, doc: 'Paise per US$1 (7000 = Rs 70). Used only until the daily rate table has a rate; after that the table (plus fx_margin_bps) is used.' },
+  base_currency: { type: 'cur', def: 'INR', doc: 'Currency a person pays in by default (INR or USD; nothing else can be paid in).' },
+  display_currency: { type: 'curnull', def: null, doc: 'Optional third currency shown next to prices for information only (for example EUR). Never charged.' },
+  fx_margin_bps: { type: 'int', def: 0, min: 0, max: 2000, doc: 'Margin added to the daily INR rate for this tenant, in basis points (100 = 1%).' },
+  fx_max_age_hours: { type: 'int', def: 72, min: 1, max: 720, doc: 'How old the last good exchange rate may be before new INR orders are paused.' },
+  inr_round_to_rupee: { type: 'bool', def: 1, doc: 'Round INR prices for credit orders up to a whole rupee.' },
+  buy_min_credits: { type: 'int', def: 100, min: 1, max: 100000000, doc: 'Smallest credit order (100 = US$1).' },
+  buy_max_credits: { type: 'int', def: 500000, min: 1, max: 1000000000, doc: 'Largest single credit order (500000 = US$5,000).' },
+  order_expiry_minutes: { type: 'int', def: 60, min: 5, max: 10080, doc: 'Minutes before an unpaid credit order is marked failed (a late payment is still credited at the locked rate).' },
+  read_cache_max_age_seconds: { type: 'int', def: 300, min: 0, max: 86400, doc: 'If the database fails, a balance seen this recently may still be shown (marked degraded). 0 = never.' },
   bought_expiry_days: { type: 'int', def: 365, min: 0, max: 3650, doc: 'Days a bought lot stays valid. 0 = no end.' },
   bonus_expiry_days: { type: 'int', def: 365, min: 0, max: 3650, doc: 'Days a bonus lot stays valid. 0 = no end.' },
   commission_expiry_days: { type: 'int', def: 0, min: 0, max: 3650, doc: 'Days a commission lot stays valid. 0 = no end (it is money owed).' },
@@ -21,6 +33,8 @@ export const SCHEMA = {
   capture_grace_minutes: { type: 'int', def: 5, min: 0, max: 120, doc: 'Extra minutes a late payment may still capture a hold.' },
   min_cash_due_inr: { type: 'int', def: 100, min: 0, max: 100000000, doc: 'Smallest cash left to pay in paise (payment gateway minimum). 0 = none.' },
   min_cash_due_usd: { type: 'int', def: 0, min: 0, max: 100000000, doc: 'Smallest cash left to pay in cents. 0 = none.' },
+  commission_max_per_event: { type: 'int', def: 50000, min: 1, max: 1000000000, doc: 'Largest commission one sale can pay (50000 = $500).' },
+  commission_daily_cap: { type: 'int', def: 500000, min: 1, max: 1000000000, doc: 'Most commission credits paid across the whole tenant per 24 hours.' },
   manual_bonus_max: { type: 'int', def: 500, min: 0, max: 10000000, doc: 'Largest single hand-given bonus (credits).' },
   conversion_enabled: { type: 'bool', def: 0, doc: 'Commission-to-cash requests. OFF until owner switches it on.' },
   conversion_hold_days: { type: 'int', def: 7, min: 0, max: 365, doc: 'Days a commission lot must age before it counts as convertible.' },
@@ -35,7 +49,7 @@ export const SCHEMA = {
   new_accounts_per_hour: { type: 'int', def: 100, min: 1, max: 1000000, doc: 'New people created by earning events per hour.' },
   tenant_daily_bonus_cap: { type: 'int', def: 50000, min: 0, max: 1000000000, doc: 'Most bonus credits given across the whole tenant per 24 hours.' },
   api_rate_per_minute: { type: 'int', def: 600, min: 1, max: 1000000, doc: 'Signed calls allowed per key per minute.' },
-  wording_convert_line: { type: 'str', def: 'You can convert {amount}', doc: 'Line under the balance. {amount} is filled in.' },
+  wording_convert_line: { type: 'str', def: 'You can convert {amount}', doc: 'Line under the balance. {amount} is filled in with credits and their US$ value.' },
   wording_settling_line: { type: 'str', def: 'Settling soon: {amount}', doc: 'Line for credits still settling. {amount} is filled in.' },
   theme_enabled: { type: 'bool', def: 1, doc: 'Show the theme skin. Balances are identical with it off.' },
   theme_name: { type: 'str', def: 'classic', doc: 'Theme pack name.' },
@@ -55,6 +69,11 @@ export async function getSettings(ctx) {
   const rows = await ctx.db.all('SELECT key, value FROM tenant_setting WHERE tenant_id = ?', ctx.tenantId);
   const out = { ...DEFAULTS };
   for (const r of rows) if (r.key in SCHEMA) out[r.key] = parse(r.key, r.value);
+  // Daily rate table beats the hand-typed INR figure once it has a rate. 'stale' keeps the last rate but pauses new INR orders.
+  const fx = await currentRate(ctx, 'INR', out.fx_max_age_hours);
+  out.fx_state = fx.state;
+  out.fx_as_of = fx.as_of ?? null;
+  if (fx.state !== 'none') out.inr_paise_per_usd = Math.max(100, Math.round((fx.row.rate_x10000 / 100) * (10000 + out.fx_margin_bps) / 10000));
   ctx._settings = out;
   return out;
 }
@@ -82,6 +101,10 @@ export function validate(key, value) {
     case 'cur':
       if (value !== 'INR' && value !== 'USD') throw bad("must be 'INR' or 'USD'");
       return value;
+    case 'curnull':
+      if (value === null) return null;
+      if (typeof value !== 'string' || !/^[A-Z]{3}$/.test(value)) throw bad('null or a 3-letter code like EUR');
+      return value;
     case 'color':
       if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) throw bad('colour like #0b6b57');
       return value;
@@ -100,7 +123,7 @@ export async function setSettings(ctx, patch) {
     const any = await ctx.db.first('SELECT 1 x FROM entry WHERE tenant_id = ? LIMIT 1', ctx.tenantId);
     if (any) throw new ApiError(409, 'rate_locked', 'Credits per US$1 cannot change once credits exist.');
   }
-  if ('inr_paise_per_usd' in clean) {
+  if ('inr_paise_per_usd' in clean && before.fx_state === 'none') {
     const o = before.inr_paise_per_usd;
     if (Math.abs(clean.inr_paise_per_usd - o) * 10 > o) throw new ApiError(422, 'rate_change_too_big', 'The INR rate can move by at most 10% in one change.');
   }
@@ -138,3 +161,6 @@ export function minorFromCredits(s, cur, credits) {
 export function fmtUsd(s, credits) {
   return (credits / s.credits_per_usd).toFixed(2);
 }
+export const fmtCredits = (n) => Number(n).toLocaleString('en-US');
+/** "2,000 credits (US$20.00)" - credits first, US$ second. */
+export const creditsText = (s, n) => `${fmtCredits(n)} ${s.unit_label} (US$${fmtUsd(s, n)})`;

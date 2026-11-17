@@ -104,7 +104,7 @@ test('cancelled paid order returns credits to the buckets they came from; no mor
   assert.equal(b.buckets.bonus, 300);
   assert.equal(b.buckets.bought, 5000);
   const again = await s.api.post('/v1/refund', { type: 'order', hold_id: r.body.hold_id, credits: 1 });
-  assert.equal(again.body.error.code, 'more_than_spent');
+  assert.equal(again.body.error.code, 'nothing_to_return');
   assert.deepEqual(await verifyBalances(s.ctx()), []);
 });
 
@@ -136,7 +136,7 @@ test('chargeback removes what is left of that purchase and pauses the account', 
   assert.equal((await bal(s.api, 'a@x.com')).balance, 0);
   const again = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'o2', amount_minor: 300, currency: 'USD' });
   assert.equal(again.body.reason, 'account_frozen');
-  assert.equal((await buy(s.api, 'a@x.com', 100, 'p9')).status, 403);
+  assert.equal((await buy(s.api, 'a@x.com', 100, 'p9')).status, 200); // money already taken: credited even though the account is paused
   assert.equal((await event(s.api, 'a@x.com', 'account_created')).body.reason, 'account_frozen');
   assert.deepEqual(await verifyBalances(s.ctx()), []);
 });

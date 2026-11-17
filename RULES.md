@@ -8,9 +8,20 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | Setting | Starting value | Meaning |
 |---|---|---|
 | `product_name` | `"Corporate Moneypenny"` | Public product name shown to people. |
-| `unit_name` | `"Credit $"` | Name of the credit unit. |
+| `currency_name` | `"Moneypenny Credits"` | Name of the credit currency shown to people (a tenant can rename it). |
+| `unit_label` | `"credits"` | Word used after a number of credits. |
+| `unit_symbol` | `"MC"` | Short symbol for the currency. It is never a dollar sign. |
 | `credits_per_usd` | `100` | Credits per US$1 (100 = one credit is one cent). |
-| `inr_paise_per_usd` | `7000` | Paise per US$1 (7000 = Rs 70). Owner sets the real figure. |
+| `inr_paise_per_usd` | `7000` | Paise per US$1 (7000 = Rs 70). Used only until the daily rate table has a rate; after that the table (plus fx_margin_bps) is used. |
+| `base_currency` | `"INR"` | Currency a person pays in by default (INR or USD; nothing else can be paid in). |
+| `display_currency` | `null` | Optional third currency shown next to prices for information only (for example EUR). Never charged. |
+| `fx_margin_bps` | `0` | Margin added to the daily INR rate for this tenant, in basis points (100 = 1%). |
+| `fx_max_age_hours` | `72` | How old the last good exchange rate may be before new INR orders are paused. |
+| `inr_round_to_rupee` | `1` | Round INR prices for credit orders up to a whole rupee. |
+| `buy_min_credits` | `100` | Smallest credit order (100 = US$1). |
+| `buy_max_credits` | `500000` | Largest single credit order (500000 = US$5,000). |
+| `order_expiry_minutes` | `60` | Minutes before an unpaid credit order is marked failed (a late payment is still credited at the locked rate). |
+| `read_cache_max_age_seconds` | `300` | If the database fails, a balance seen this recently may still be shown (marked degraded). 0 = never. |
 | `bought_expiry_days` | `365` | Days a bought lot stays valid. 0 = no end. |
 | `bonus_expiry_days` | `365` | Days a bonus lot stays valid. 0 = no end. |
 | `commission_expiry_days` | `0` | Days a commission lot stays valid. 0 = no end (it is money owed). |
@@ -24,6 +35,8 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `capture_grace_minutes` | `5` | Extra minutes a late payment may still capture a hold. |
 | `min_cash_due_inr` | `100` | Smallest cash left to pay in paise (payment gateway minimum). 0 = none. |
 | `min_cash_due_usd` | `0` | Smallest cash left to pay in cents. 0 = none. |
+| `commission_max_per_event` | `50000` | Largest commission one sale can pay (50000 = $500). |
+| `commission_daily_cap` | `500000` | Most commission credits paid across the whole tenant per 24 hours. |
 | `manual_bonus_max` | `500` | Largest single hand-given bonus (credits). |
 | `conversion_enabled` | `0` | Commission-to-cash requests. OFF until owner switches it on. |
 | `conversion_hold_days` | `7` | Days a commission lot must age before it counts as convertible. |
@@ -38,7 +51,7 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `new_accounts_per_hour` | `100` | New people created by earning events per hour. |
 | `tenant_daily_bonus_cap` | `50000` | Most bonus credits given across the whole tenant per 24 hours. |
 | `api_rate_per_minute` | `600` | Signed calls allowed per key per minute. |
-| `wording_convert_line` | `"You can convert {amount}"` | Line under the balance. {amount} is filled in. |
+| `wording_convert_line` | `"You can convert {amount}"` | Line under the balance. {amount} is filled in with credits and their US$ value. |
 | `wording_settling_line` | `"Settling soon: {amount}"` | Line for credits still settling. {amount} is filled in. |
 | `theme_enabled` | `1` | Show the theme skin. Balances are identical with it off. |
 | `theme_name` | `"classic"` | Theme pack name. |
@@ -69,3 +82,8 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 - One real-payment id works once per tenant, across purchases, order cash and payouts.
 - A chargeback removes everything that came from that payment, including credits held in orders or returned from orders.
 - E-mails are plain ASCII with no trailing dots; throw-away domains are blocked including their sub-domains.
+- Commission needs the sale's real payment id (`sale_ref`); one sale pays once per tenant; per-sale and per-day commission caps are settings. A charged-back sale removes its commission.
+- A conversion handed to a payment rail cannot be rejected; only a person marking it paid closes it.
+- Orders keep the exchange rate they were made at (credit orders and holds). A stale rate pauses new INR cash and INR credit orders only.
+- Webhook addresses: https only, public host names only (no IP numbers, no user info, no internal or wildcard-DNS names). The real sender must also check the resolved IP address.
+- Idempotency keys starting `pay:` are reserved for payment ids.

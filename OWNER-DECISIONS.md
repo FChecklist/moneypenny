@@ -18,6 +18,14 @@ Nothing here is final. Every default is a setting and can change without code.
 
 Design rules from the owner (17 Nov): Moneypenny is a separate product, linked to games and other products by API only, with no end-user login or page. It is the complete credit register (rates locked per entry, real-money value, TDS/GST fields, outside payment id). Conversion is a calculating skeleton behind a stub payment rail, off by default. Payments reach it only through IT Services' `purchase` key.
 
+Added 17 Nov (gate and rates), all settings:
+- Currency name "Moneypenny Credits" (tenant setting; no $ sign as the unit). The word is visible to end users, so the trademark check applies to it.
+- Daily rate: fixed per UTC day; a move over 5% waits for a person's approval (**the integration plan says no approval gate; I followed the later instruction. Please confirm one.**); the last good rate is used up to 72 hours, then new INR orders pause (USD still works).
+- FX margin default **0** here; the integration plan suggests 5% (`fx_margin_bps` 500). **Owner to set.** INR prices round up to the whole rupee.
+- Order lock: an order keeps its rate. A credit order unpaid after 60 minutes is marked failed, but a payment that still arrives is credited at the locked rate (money is never kept without credits). The plan suggests a 120-minute window that refuses late payments; I chose to credit them.
+- Commission needs the sale's payment id, pays once per sale, and has caps: `commission_max_per_event` (50,000 credits = $500) and `commission_daily_cap` (500,000 = $5,000 a day per tenant).
+- Not done: chargeback of a payment that paid an order's cash part; money refunds for credits returned to a lot after an order cancel.
+
 Other numbers I had to pick (please confirm or change):
 - INR rate: 7,000 paise per US$1 (Rs 70). The real rate is unknown. (`inr_paise_per_usd`)
 - Bought credit lasts 365 days; bonus 365 days; commission never ends; returned credits last at least 30 days.

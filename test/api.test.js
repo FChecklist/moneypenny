@@ -136,8 +136,8 @@ test('tenants cannot see or touch each other', async () => {
   assert.deepEqual(seqs.map((x) => x.m), [1, 1]);
   // admin keys only reach their own tenant's settings and rules
   const ba = b.admin;
-  await ba.put('/v1/admin/settings', { unit_name: 'Pts' });
-  assert.equal((await s.admin.get('/v1/admin/settings')).body.settings.unit_name, 'Credit $');
+  await ba.put('/v1/admin/settings', { currency_name: 'Pts' });
+  assert.equal((await s.admin.get('/v1/admin/settings')).body.settings.currency_name, 'Moneypenny Credits');
   assert.equal((await ba.get('/v1/admin/rules')).body.rules.length, 0);
   assert.equal((await s.admin.get('/v1/admin/rules')).body.rules.length, 5);
 });
@@ -224,7 +224,7 @@ test('settings drive the display: rate and wording', async () => {
   const s = await setup();
   await s.admin.put('/v1/admin/settings', { credits_per_usd: 200 });
   await buy(s.api, 'a@x.com', 1000, 'p1');
-  assert.equal((await bal(s.api, 'a@x.com')).display.amount, '5.00');
+  assert.equal((await bal(s.api, 'a@x.com')).display.usd, '5.00');
 });
 
 test('health endpoint reports a clean chain', async () => {

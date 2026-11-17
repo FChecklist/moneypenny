@@ -404,8 +404,8 @@ test('reconcile: liability by bucket and tenant, conversions pending and paid', 
   const r = (await s.admin.get('/v1/admin/reconcile')).body;
   assert.deepEqual(r.outstanding, { bought: 700, bonus: 100, commission: 0 });
   assert.deepEqual(r.held_in_orders, { bought: 300, bonus: 0, commission: 0 });
-  assert.equal(r.conversions.paid.n, 1);
-  assert.equal(r.conversions.requested.credits, 1500);
+  assert.equal(r.conversions['paid:INR'].n, 1);
+  assert.equal(r.conversions['requested:INR'].credits, 1500);
   assert.equal(r.in_conversion, 1500);
   assert.equal(r.liability_credits, 700 + 100 + 300 + 1500);
   assert.deepEqual(r.ledger.mismatches, []);

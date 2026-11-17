@@ -12,7 +12,7 @@ export async function reconcile(ctx) {
   }
   for (const r of await ctx.db.all("SELECT p.bucket, SUM(p.amount) c FROM hold h JOIN hold_part p ON p.hold_id = h.id WHERE h.tenant_id = ? AND h.status = 'held' GROUP BY p.bucket", ctx.tenantId)) out.held_in_orders[r.bucket] = r.c;
   for (const r of await ctx.db.all('SELECT status, COUNT(*) n, SUM(credits) credits, SUM(gross_minor) gross_minor, SUM(tds_minor) tds_minor, SUM(net_minor) net_minor, currency FROM conversion_request WHERE tenant_id = ? GROUP BY status, currency', ctx.tenantId)) {
-    out.conversions[r.status] = { n: r.n, credits: r.credits, gross_minor: r.gross_minor, tds_minor: r.tds_minor, net_minor: r.net_minor, currency: r.currency };
+    out.conversions[`${r.status}:${r.currency}`] = { n: r.n, credits: r.credits, gross_minor: r.gross_minor, tds_minor: r.tds_minor, net_minor: r.net_minor, currency: r.currency };
     if (['requested', 'approved', 'instructed'].includes(r.status)) out.in_conversion += r.credits;
   }
   const sum = (o) => o.bought + o.bonus + o.commission;
@@ -27,13 +27,18 @@ export async function reconcileAll(db, now = Date.now) {
   const tenants = await db.all('SELECT id FROM tenant ORDER BY id');
   const per = [];
   for (const t of tenants) per.push(await reconcile({ db, now, tenantId: t.id }));
-  const total = { outstanding: zero(), held_in_orders: zero(), liability_credits: 0 };
+  const total = { outstanding: zero(), held_in_orders: zero(), in_conversion: 0, conversions: {}, liability_credits: 0 };
   for (const p of per) {
     for (const b of Object.keys(total.outstanding)) {
       total.outstanding[b] += p.outstanding[b];
       total.held_in_orders[b] += p.held_in_orders[b];
     }
     total.liability_credits += p.liability_credits;
+    total.in_conversion += p.in_conversion;
+    for (const [k, v] of Object.entries(p.conversions)) {
+      const t = (total.conversions[k] ||= { n: 0, credits: 0, gross_minor: 0, tds_minor: 0, net_minor: 0, currency: v.currency });
+      for (const f of ['n', 'credits', 'gross_minor', 'tds_minor', 'net_minor']) t[f] += v[f];
+    }
   }
   return { by_tenant: per, total };
 }
