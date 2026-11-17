@@ -514,3 +514,26 @@ test('A11-3: INR purchase credit is refused with no usable rate when the service
   const r = await s.pay.post('/v1/credit_purchase', { email: 'a@x.com', amount: 10000, paid_minor: 700000, currency: 'INR', payment_ref: 'INR1' });
   assert.equal(r.status, 503);
 });
+
+test('A12-1: an empty mode is not "on"', () => {
+  const w = { op: null, method: 'POST', scope: 'purchase' };
+  assert.equal(checkStatus({ hub: { mode: '' } }, w).code, 'status_unknown');
+  assert.equal(checkStatus({ hub: { mode: 'on' }, products: { mnp: { mode: '' } } }, w).code, 'status_unknown');
+});
+test('A12-2: setup call cannot be replayed; keys can be issued and revoked; quote gives no INR price without a rate', async () => {
+  const s = await setup({ requireRate: true });
+  const q = await s.read.get('/v1/quote?credits=1000');
+  assert.equal(q.body.inr_minor, null);
+  assert.ok(!/Rs/.test(q.body.display_text));
+  const ts = s.clock.t;
+  const raw = JSON.stringify({ action: 'issue_key', scope: 'read', label: 'x' });
+  const sig = await hmacHex(s.master, `mnp-setup\n${ts}\n${raw}`);
+  const call = () => s.app.fetch(new Request('http://x/v1/setup', { method: 'POST', body: raw, headers: { 'x-setup-ts': String(ts), 'x-setup-sig': sig } }));
+  const first = await call();
+  assert.equal(first.status, 200);
+  const k = await first.json();
+  assert.equal((await call()).status, 403);
+  assert.equal((await setupCall(s, { action: 'revoke_key', key_id: k.key_id })).status, 200);
+  const raw2 = JSON.stringify({ action: 'revoke_key', key_id: k.key_id });
+  assert.equal((await s.mk({ key_id: k.key_id, secret: k.secret }).get('/v1/balance?email=a@x.com')).status, 401);
+});

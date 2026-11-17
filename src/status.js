@@ -7,9 +7,11 @@ export const PRODUCT_CODE = 'mnp';
 /** A usable status document: an object with a text mode at hub level or for this product; a product entry must be an object with a text mode; the action list must be a list. */
 export function validStatus(st) {
   if (!st || typeof st !== 'object' || Array.isArray(st)) return false;
+  const okMode = (m) => typeof m === 'string' && m.length > 0;
   const p = st.products && typeof st.products === 'object' ? st.products[PRODUCT_CODE] : undefined;
-  if (p !== undefined && (!p || typeof p !== 'object' || typeof p.mode !== 'string' || (p.disabled_actions !== undefined && !Array.isArray(p.disabled_actions)))) return false;
-  return typeof (st.hub && st.hub.mode) === 'string' || typeof (p && p.mode) === 'string';
+  if (st.hub !== undefined && (!st.hub || typeof st.hub !== 'object' || (st.hub.mode !== undefined && !okMode(st.hub.mode)))) return false;
+  if (p !== undefined && (!p || typeof p !== 'object' || !okMode(p.mode) || (p.disabled_actions !== undefined && !Array.isArray(p.disabled_actions)))) return false;
+  return okMode(st.hub && st.hub.mode) || okMode(p && p.mode);
 }
 
 /** Returns null when the call may go on, or { code, message } when it must stop. */

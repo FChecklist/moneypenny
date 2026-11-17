@@ -46,7 +46,7 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `conversion_currency` | `"INR"` | Currency a conversion is calculated in (INR or USD). |
 | `gst_rate_bps` | `null` | GST rate on conversions in basis points. Recorded on entries; unset = none. |
 | `tds_rate_bps` | `null` | TDS rate in basis points. Must be set (by the CA) before conversion can be used. |
-| `refund_money_enabled` | `1` | Allow real-money refunds of unspent bought credits. |
+| `refund_money_enabled` | `1` | Allow refunds of the money paid for unspent bought credits. |
 | `blocked_email_domains` | `["mailinator.com","guerrillamail.com","10minutemail.com","tempmail.com","yopmail.com","trashmail.com"]` | Throw-away e-mail domains that earn nothing. |
 | `account_events_per_day` | `20` | Earning events counted per person per 24 hours. |
 | `new_accounts_per_hour` | `100` | New people created by earning events per hour. |

@@ -44,7 +44,7 @@ export const SCHEMA = {
   conversion_currency: { type: 'cur', def: 'INR', doc: 'Currency a conversion is calculated in (INR or USD).' },
   gst_rate_bps: { type: 'intnull', def: null, min: 0, max: 10000, doc: 'GST rate on conversions in basis points. Recorded on entries; unset = none.' },
   tds_rate_bps: { type: 'intnull', def: null, min: 0, max: 10000, doc: 'TDS rate in basis points. Must be set (by the CA) before conversion can be used.' },
-  refund_money_enabled: { type: 'bool', def: 1, doc: 'Allow real-money refunds of unspent bought credits.' },
+  refund_money_enabled: { type: 'bool', def: 1, doc: 'Allow refunds of the money paid for unspent bought credits.' },
   blocked_email_domains: { type: 'domains', def: ['mailinator.com', 'guerrillamail.com', '10minutemail.com', 'tempmail.com', 'yopmail.com', 'trashmail.com'], doc: 'Throw-away e-mail domains that earn nothing.' },
   account_events_per_day: { type: 'int', def: 20, min: 1, max: 100000, doc: 'Earning events counted per person per 24 hours.' },
   new_accounts_per_hour: { type: 'int', def: 100, min: 1, max: 1000000, doc: 'New people created by earning events per hour.' },

@@ -62,12 +62,12 @@ export async function quote(ctx, credits, currency = null) {
     currency_name: s.currency_name,
     usd: fmtUsd(s, credits),
     usd_minor: minorFromCredits(s, 'USD', credits),
-    inr_minor: priceMinor(s, 'INR', credits),
+    inr_minor: s.fx_state === 'stale' ? null : priceMinor(s, 'INR', credits), // no price without a usable rate
     pay_in: ['INR', 'USD'],
     base_currency: s.base_currency,
     rate_state: s.fx_state, // fresh, fallback, stale, or none (hand-set rate)
     rate_as_of: s.fx_as_of ? new Date(s.fx_as_of).toISOString() : null,
-    inr_paise_per_usd: s.inr_paise_per_usd,
+    inr_paise_per_usd: s.fx_state === 'stale' ? null : s.inr_paise_per_usd,
   };
   if (currency && currency !== 'INR' && currency !== 'USD') {
     const r = await displayRate(ctx, currency);
@@ -76,7 +76,7 @@ export async function quote(ctx, credits, currency = null) {
     const r = await displayRate(ctx, s.display_currency);
     out.local = r ? { currency: s.display_currency, amount: ((credits / s.credits_per_usd) * r.units_per_usd).toFixed(2), display_only: true, rate_as_of: new Date(r.as_of).toISOString() } : null;
   }
-  const localText = out.local ? `about ${out.local.amount} ${out.local.currency}` : `about Rs ${(out.inr_minor / 100).toFixed(2)}`;
+  const localText = out.local ? `about ${out.local.amount} ${out.local.currency}` : out.inr_minor == null ? null : `about Rs ${(out.inr_minor / 100).toFixed(2)}`;
   out.display_text = displayText(s, credits, localText);
   return out;
 }

@@ -8,7 +8,7 @@
 - Cloudflare executor: one SQLite-backed Durable Object (`src/do.js`, `src/worker.js`), not plain D1 (D1 has no interactive transactions).
 
 ## Tests
-- 254 tests pass (`npm test`), also on the Durable Object adapter with `MNP_DB=do npm test`. The adapter is tested only against a stand-in for Cloudflare's storage.
+- 256 tests pass (`npm test`), also on the Durable Object adapter with `MNP_DB=do npm test`. The adapter is tested only against a stand-in for Cloudflare's storage.
 
 ## Audit rounds
 | Round | Verdict | Notes |
@@ -22,7 +22,8 @@
 | 9 | FAIL (off-switch failed open on a Hub outage; Worker used stub rail; instruct had no timeout; chargeback skipped spent-commission debt; rounding; docs) | fixed |
 | 10 | FAIL (off-switch open on cold start/unset URL; chargeback debt miscounted; no rate source in Worker; order return kept bonus unlock) | fixed |
 | 11 | FAIL (INR purchase on default rate, malformed status shapes, no way to set up or set a rate on a fresh deploy, body size, AI full scans) | fixed: setup route, strict status, 6h max age |
-| 12 | pending | fresh independent auditor on the final code |
+| 12 | FAIL (empty status mode, quote priced INR without a rate, no key revoke/issue, setup replay/audit, body cap) | fixed |
+| 13 | pending | fresh independent auditor on the final code |
 
 A second independent PASS on the exact final code is still needed before reporting done.
 
