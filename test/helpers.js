@@ -61,12 +61,12 @@ export const buy = (api, email, credits, ref, extra = {}) =>
 
 let ek = 0;
 /** A real payment is noted first (by the payment side), as in life. Pass noNotice: true to skip it. */
-export const note = (api, payment_ref, paid_minor, currency = 'USD') =>
-  (api.pay || api).post('/v1/payment_notice', { payment_ref, paid_minor, currency });
+export const note = (api, payment_ref, paid_minor, currency = 'USD', payer_email = undefined) =>
+  (api.pay || api).post('/v1/payment_notice', { payment_ref, paid_minor, currency, ...(payer_email ? { payer_email } : {}) });
 
 export const event = async (api, email, type, extra = {}) => {
   const { noNotice, ...rest } = extra;
   if (rest.cash_minor !== undefined && rest.sale_ref === undefined) rest.sale_ref = `sale-${++ek}-${Math.random().toString(36).slice(2)}`;
-  if (rest.cash_minor !== undefined && !noNotice && typeof rest.sale_ref === 'string' && Number.isInteger(rest.cash_minor) && rest.cash_minor > 0) await note(api, rest.sale_ref, rest.cash_minor, rest.currency ?? 'USD');
+  if (rest.cash_minor !== undefined && !noNotice && typeof rest.sale_ref === 'string' && Number.isInteger(rest.cash_minor) && rest.cash_minor > 0) await note(api, rest.sale_ref, rest.cash_minor, rest.currency ?? 'USD', rest.payer_email);
   return api.post('/v1/event', { email, event_type: type, event_key: `ev-${++ek}-${Math.random()}`, ...rest });
 };

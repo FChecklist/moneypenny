@@ -153,9 +153,9 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       let idem = request.headers.get('idempotency-key');
       // credit bought: the real payment id IS the idempotency key unless the caller sends its own
       const payRoute = route[1] === '/v1/credit_purchase' || route[1] === '/v1/rail/confirm' || route[1] === '/v1/payment_notice';
-      if (!idem && payRoute && typeof body.payment_ref === 'string') idem = `pay:${body.payment_ref}`;
+      if (!idem && payRoute && typeof body.payment_ref === 'string') idem = `pay:${route[1]}:${body.payment_ref}`;
       // "pay:" keys belong to real payments only: no other route may use that namespace, and a payment route may only use its own id
-      if (idem && idem.startsWith('pay:') && !(payRoute && idem === `pay:${body.payment_ref}`)) throw new ApiError(400, 'bad_idempotency_key', 'Keys starting with "pay:" are reserved for payment ids.');
+      if (idem && idem.startsWith('pay:') && !(payRoute && (idem === `pay:${body.payment_ref}` || idem === `pay:${route[1]}:${body.payment_ref}`))) throw new ApiError(400, 'bad_idempotency_key', 'Keys starting with "pay:" are reserved for payment ids.');
       if (route[3] && (!idem || idem.length > 120)) throw new ApiError(400, 'idempotency_key_required', 'Send an Idempotency-Key header (up to 120 characters).');
 
       // 2) the work, all or nothing
@@ -166,7 +166,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
         if (auth.scope === 'ai_read' && !set.ai_enabled) throw new ApiError(403, 'ai_off', 'AI access is switched off for this tenant.');
         let reqHash = null;
         if (route[3]) {
-          reqHash = await sha256Hex(`${auth.scope}\n${method}\n${pathQuery}\n${raw}`);
+          reqHash = await sha256Hex(`${auth.scope}:${auth.keyId}\n${method}\n${pathQuery}\n${raw}`);
           const prior = await t.first('SELECT * FROM idempotency WHERE tenant_id = ? AND key = ?', ctx.tenantId, idem);
           if (prior) {
             if (prior.req_hash !== reqHash) throw new ApiError(409, 'idempotency_conflict', 'This key was used for a different request.');
@@ -174,6 +174,8 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
           }
         }
         const result = await route[4](ctx, body, url.searchParams);
+        // every write by a product, payment or AI key leaves an attributable record (key id and caller type are in the entry)
+        if (method !== 'GET' && auth.scope !== 'ai_read' && auth.scope !== 'admin') await audit(ctx, 'api.write', { path: url.pathname, op: op?.id ?? null });
         if (auth.scope === 'ai_read') {
           // everything an AI key does is recorded, and text written by others is flagged as data
           await audit(ctx, method === 'GET' ? 'ai.read' : 'ai.ask', { path: url.pathname, op: op?.id ?? null });

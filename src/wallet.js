@@ -107,19 +107,25 @@ export async function expireLots(ctx) {
 /** One real-payment id can be used once per tenant, whether it bought credits, paid an order or paid out. */
 /** A payment id is compared without regard to upper/lower case everywhere, so 'Pay_1' and 'pay_1' are one payment. */
 export const lc = (x) => String(x).toLowerCase();
+/** A payment id as given by a caller: it may not start with our own internal prefix 'sale:' (that would make one payment look like two). */
+export const payId = (x, name = 'payment_ref') => {
+  const r = ref(x, name);
+  if (/^sale:/i.test(r)) throw new ApiError(400, 'bad_request', `${name} may not start with "sale:".`);
+  return lc(r);
+};
 
 /** What we know about a real payment: a notice from the payment side, or a purchase we credited. null if unknown. */
 export async function findPayment(ctx, refId) {
-  const r = lc(refId).replace(/^sale:/, '');
-  const v = await ctx.db.first('SELECT paid_minor, currency FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
-  if (v) return { paid_minor: v.paid_minor, currency: v.currency };
-  const l = await ctx.db.first("SELECT paid_minor, currency FROM lot WHERE tenant_id = ? AND source = 'purchase' AND lower(source_ref) = ?", ctx.tenantId, r);
-  return l && l.paid_minor ? { paid_minor: l.paid_minor, currency: l.currency } : null;
+  const r = lc(refId);
+  const v = await ctx.db.first('SELECT paid_minor, currency, payer_canon FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
+  if (v) return { paid_minor: v.paid_minor, currency: v.currency, payer: v.payer_canon };
+  const l = await ctx.db.first("SELECT l.paid_minor - l.refunded_minor AS left_minor, l.currency, a.email_canon AS payer FROM lot l JOIN account a ON a.id = l.account_id WHERE l.tenant_id = ? AND l.source = 'purchase' AND lower(l.source_ref) = ?", ctx.tenantId, r);
+  return l && l.left_minor > 0 ? { paid_minor: l.left_minor, currency: l.currency, payer: l.payer } : null;
 }
 
 /** The payment side tells us a real payment happened (purchase key). Same ref again with the same figures is a no-op. */
 export async function paymentNotice(ctx, b) {
-  const r = lc(ref(b.payment_ref, 'payment_ref'));
+  const r = payId(b.payment_ref);
   const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
   const cur = b.currency;
   if (cur !== 'INR' && cur !== 'USD') throw new ApiError(400, 'bad_currency', 'Payment is in INR or USD only.');
@@ -150,7 +156,8 @@ export async function creditPurchase(ctx, b, { lock = null } = {}) {
   const amount = int(b.amount, 'amount', { min: 1, max: 100000000 });
   const paidMinor = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
   const currency = b.currency;
-  const payRef = ref(b.payment_ref, 'payment_ref');
+  const payRef = payId(b.payment_ref);
+  if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, payRef)) throw new ApiError(409, 'payment_reversed', 'That payment was taken back.');
   if (creditsFromMinor(s, currency, paidMinor) < amount) throw new ApiError(422, 'amount_exceeds_payment', 'More credits than the payment covers.');
   // A paused account may still be credited: the money has already been taken, so the credits must exist.
   const acc = await ensureAccount(ctx, b.email);
@@ -214,13 +221,15 @@ export async function processEvent(ctx, b) {
     if (canonEmail(payer) === canon) return reject(ctx, ev, 'self_referral', rb);
     if (!Number.isInteger(b.cash_minor) || b.cash_minor <= 0 || b.cash_minor > 100000000000) return reject(ctx, ev, 'no_cash_no_commission', rb);
     // The sale itself must be named (the real payment id), and each sale can pay commission once per tenant.
-    if (typeof b.sale_ref !== 'string' || !/^[A-Za-z0-9._:/=+-]{1,100}$/.test(b.sale_ref)) return reject(ctx, ev, 'sale_ref_required', rb);
+    if (typeof b.sale_ref !== 'string' || !/^[A-Za-z0-9._:/=+-]{1,100}$/.test(b.sale_ref) || /^sale:/i.test(b.sale_ref)) return reject(ctx, ev, 'sale_ref_required', rb);
     saleRef = lc(b.sale_ref);
     // the sale must be a payment the payment side told us about, for at least this much, in this currency
     const pay = await findPayment(ctx, saleRef);
-    if (!pay) return reject(ctx, ev, 'payment_not_verified', rb);
+    // not remembered under this event key: once the payment side has noted the payment, the same event can be sent again
+    if (!pay) return { granted: 0, reason: 'payment_not_verified' };
+    if (!pay.payer || pay.payer !== canonEmail(payer)) return reject(ctx, ev, 'payer_mismatch', rb); // the buyer on the payment must be the payer named
     if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, saleRef)) return reject(ctx, ev, 'sale_reversed', rb);
-    if (pay.currency !== b.currency || b.cash_minor > pay.paid_minor) return reject(ctx, ev, 'cash_exceeds_payment', rb);
+    if (pay.currency !== b.currency || b.cash_minor > pay.paid_minor) return { granted: 0, reason: 'cash_exceeds_payment' };
     if (await ctx.db.first('SELECT 1 x FROM payment_ref WHERE tenant_id = ? AND ref = ?', ctx.tenantId, `sale:${saleRef}`)) return reject(ctx, ev, 'sale_already_used', rb);
     const cash = creditsFromMinor(s, b.currency, b.cash_minor);
     amount = Math.floor((cash * rule.amount) / 10000);

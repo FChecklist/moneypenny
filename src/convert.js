@@ -15,7 +15,7 @@ import { isReversed } from './spend.js';
 /** Pure calculation. gross is in the conversion currency; tds and gst come from settings; no rounding in the person's disfavour on net. */
 export function calculate(s, credits) {
   const cur = s.conversion_currency;
-  const grossMinor = Math.floor((credits * (cur === 'INR' ? s.inr_paise_per_usd : 100)) / s.credits_per_usd);
+  const grossMinor = Math.floor((credits * (cur === 'INR' ? (s.inr_paise_raw ?? s.inr_paise_per_usd) : 100)) / s.credits_per_usd);
   const tdsMinor = Math.ceil((grossMinor * (s.tds_rate_bps ?? 0)) / 10000);
   const gstMinor = 0; // GST is recorded on entries but not charged on a conversion in Phase 0
   return { currency: cur, gross_minor: grossMinor, tds_minor: tdsMinor, gst_minor: gstMinor, net_minor: grossMinor - tdsMinor - gstMinor };

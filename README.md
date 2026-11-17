@@ -74,3 +74,9 @@ fine for Phase 0 volume; at higher volume split it per tenant.
 The payment side calls `POST /v1/payment_notice` (purchase key) with the payment id, amount and currency. A product can
 then capture the cash part of an order, or earn a commission, only against a payment noted there (or one that bought
 credits). Payment ids are compared without regard to letter case.
+
+**Known limits (found by audit 4, left for a later phase):** a rail call (up to 4 s) runs inside the one-at-a-time
+transaction in `buy_credits`, so a very slow rail slows everyone: move it after the commit with the outbox before real traffic.
+Nothing schedules the sweep, the daily rate refresh or the webhook sender yet (no cron, no real sender). The first-ever rate
+row is only checked against the technical band (INR 10 to 500), not against a previous rate. The webhook address check is
+name-based; the real sender must also check the resolved IP.

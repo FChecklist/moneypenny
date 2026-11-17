@@ -5,7 +5,7 @@
 import { ApiError, MIN, newId, int, ref, isUniqueError } from './util.js';
 import { getSettings, minorFromCredits, creditsFromMinor, fmtUsd, fmtCredits, displayText } from './settings.js';
 import { findAccount, ensureAccount } from './accounts.js';
-import { creditPurchase } from './wallet.js';
+import { creditPurchase, payId } from './wallet.js';
 import { displayRate, currentRate } from './fx.js';
 import { audit } from './audit.js';
 import { emit } from './outbox.js';
@@ -172,6 +172,10 @@ export async function requeueDeadLetter(ctx, b) {
   const s = await getSettings(ctx);
   await ctx.db.run("UPDATE rail_outbox SET status = 'pending', attempts = 0, next_at = ?, last_error = NULL WHERE id = ?", ctx.now(), id);
   // a fresh start: a new rate lock window and a new unpaid-order clock
+  const ord = await ctx.db.first('SELECT credits, currency FROM purchase_order WHERE id = ?', j.order_id);
+  if (ord && ord.currency === 'INR' && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly.');
+  // re-quoted at today's rate: an order that waited out an outage is not paid at an old price
+  if (ord) await ctx.db.run("UPDATE purchase_order SET amount_minor = ?, rate_cpu = ?, rate_inr = ? WHERE id = ? AND status = 'failed' AND rail_order_id IS NULL", priceMinor(s, ord.currency, ord.credits), s.credits_per_usd, s.inr_paise_per_usd, j.order_id);
   await ctx.db.run("UPDATE purchase_order SET status = 'pending_rail', created_at = ?, lock_until = ?, updated_at = ? WHERE id = ? AND status = 'failed' AND rail_order_id IS NULL", ctx.now(), ctx.now() + s.rate_lock_minutes * MIN, ctx.now(), j.order_id);
   await audit(ctx, 'rail.requeue', { id, order_id: j.order_id });
   return { id, status: 'pending' };
@@ -184,7 +188,7 @@ export async function requeueDeadLetter(ctx, b) {
  * and even if the order had already timed out (the money is in; the person gets the credits).
  */
 export async function railConfirm(ctx, b) {
-  const payRef = ref(b.payment_ref, 'payment_ref');
+  const payRef = payId(b.payment_ref);
   const o = b.order_id
     ? await ctx.db.first('SELECT * FROM purchase_order WHERE tenant_id = ? AND id = ?', ctx.tenantId, ref(b.order_id, 'order_id'))
     : await ctx.db.first('SELECT * FROM purchase_order WHERE tenant_id = ? AND order_ref = ?', ctx.tenantId, ref(b.order_ref, 'order_ref'));
@@ -203,7 +207,7 @@ export async function railConfirm(ctx, b) {
   const late = ctx.now() > o.lock_until; // fixed when the order was made; changing the setting later does not re-price open orders
   const repriced = late && o.currency === 'INR';
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
-  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: paid, currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr } });
+  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr } });
   await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);
   // More money than the order asked for: credits are given for the order only. The extra is flagged so the payment side can refund it.
   const overpaid = !repriced && paid > o.amount_minor ? paid - o.amount_minor : 0;

@@ -15,7 +15,8 @@ export function doDb(storage) {
     const h = {
       async first(sql, ...p) { return rows(sql, p)[0] ?? null; },
       async all(sql, ...p) { return rows(sql, p); },
-      async run(sql, ...p) { const c = storage.sql.exec(sql, ...p); c.toArray(); return { changes: Number(c.rowsWritten ?? 0) }; },
+      // rows changed by THIS statement (rowsWritten would also count index rows, so it is not used)
+      async run(sql, ...p) { storage.sql.exec(sql, ...p).toArray(); return { changes: Number(rows('SELECT changes() AS c', [])[0].c) }; },
       exec(sql) { storage.sql.exec(sql).toArray(); },
       // used by migrate(): a tiny prepared-statement look-alike
       raw: {

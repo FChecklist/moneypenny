@@ -6,6 +6,7 @@ import { createApp } from './api.js';
 import { doDb } from './do.js';
 import { migrate } from './db.js';
 import { MIGRATIONS } from './migrations.gen.js';
+import { urlStatus } from './status.js';
 
 export class MoneypennyDO extends DurableObject {
   constructor(ctx, env) {
@@ -14,7 +15,8 @@ export class MoneypennyDO extends DurableObject {
     ctx.blockConcurrencyWhile(async () => {
       const db = doDb(ctx.storage);
       migrate(db, MIGRATIONS);
-      this.app = createApp({ db, master: env.MNP_MASTER_SECRET });
+      // MNP_STATUS_URL (a plain variable, not a secret) points at the Hub's status.json: the global off-switch
+      this.app = createApp({ db, master: env.MNP_MASTER_SECRET, status: env.MNP_STATUS_URL ? urlStatus(env.MNP_STATUS_URL) : null });
     });
   }
   fetch(request) {

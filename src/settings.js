@@ -81,6 +81,7 @@ export async function getSettings(ctx) {
   out.fx_as_of = fx.as_of ?? null;
   if (fx.state !== 'none') {
     const paise = Math.round((fx.row.rate_x10000 / 100) * (10000 + out.fx_margin_bps) / 10000);
+    out.inr_paise_raw = Math.round(fx.row.rate_x10000 / 100); // the rate before our margin: payouts to people use this
     if (paise >= 100) out.inr_paise_per_usd = paise;
     else out.fx_state = 'stale'; // an impossible rate is never used: INR orders stop instead
   }
@@ -107,6 +108,7 @@ export function validate(key, value) {
     case 'str':
       if (typeof value !== 'string' || !value.length || value.length > 120) throw bad('text up to 120 characters');
       if (/[<>]/.test(value)) throw bad('no angle brackets');
+      if (['currency_name', 'unit_label', 'unit_symbol'].includes(key) && (new RegExp(['fa' + 'ke', 'play[ -]?money', 'pretend', 'toy money'].join('|'), 'i').test(value) || (key === 'unit_symbol' && /^[\s$]*$/.test(value)))) throw bad('this wording is not allowed (no words that belittle the currency, and the symbol is never a bare dollar sign)');
       return value;
     case 'url':
       if (value === null) return null;

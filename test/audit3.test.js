@@ -12,9 +12,9 @@ const src = (rates) => ({ name: 'test', async fetch() { return { rates }; } });
 test('commission needs a real, noted payment of at least that size and currency', async () => {
   const s = await setup();
   assert.equal((await sale(s.api, { sale_ref: 'inv_1', noNotice: true })).body.reason, 'payment_not_verified'); // never noted
-  await note(s.api, 'inv_2', 1000);
+  await note(s.api, 'inv_2', 1000, 'USD', 'b@y.com');
   assert.equal((await sale(s.api, { sale_ref: 'inv_2', noNotice: true, cash_minor: 2000 })).body.reason, 'cash_exceeds_payment'); // bigger than the payment
-  await note(s.api, 'inv_3', 2000, 'INR');
+  await note(s.api, 'inv_3', 2000, 'INR', 'b@y.com');
   assert.equal((await sale(s.api, { sale_ref: 'inv_3', noNotice: true })).body.reason, 'cash_exceeds_payment'); // other currency
   assert.equal((await sale(s.api, { sale_ref: 'inv_4' })).body.granted, 200); // noted by the helper, as in life
 });
@@ -118,5 +118,5 @@ test('findPayment sees a purchase that bought credits', async () => {
   const s = await setup();
   await buy(s.api, 'a@x.com', 500, 'Buy_1');
   const p = await findPayment(s.ctx(), 'buy_1');
-  assert.deepEqual(p, { paid_minor: 500, currency: 'USD' });
+  assert.deepEqual(p, { paid_minor: 500, currency: 'USD', payer: 'a@x.com' });
 });
