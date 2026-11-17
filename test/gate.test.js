@@ -129,13 +129,36 @@ test('rail down: orders wait, retry with back-off, become dead letters, and can 
   assert.equal((await s.admin.post('/v1/admin/dead_letters/requeue', { id: dl.body.dead_letters[0].id })).status, 404);
 });
 
-test('an unpaid order times out, but a late payment is still credited at the locked price', async () => {
+test('the rate lock lasts 120 minutes; after that an unpaid order is marked failed but a payment is still credited, re-priced', async () => {
   const s = await setup();
-  const o = await buyOrder(s.api);
-  s.clock.t += 2 * 60 * MIN;
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 });
+  assert.equal((await s.admin.get('/v1/admin/settings')).body.settings.rate_lock_minutes, 120);
+  const { refreshRates } = await import('../src/fx.js');
+  const day = s.clock.t - (s.clock.t % DAY);
+  await refreshRates(s.db, { name: 't', async fetch() { return { rates: { INR: 70 } }; } }, day);
+  const o = await buyOrder(s.api, { currency: 'INR', credits: 2000, order_ref: 'lk' });
+  assert.equal(o.body.amount_minor, 140000);
+  s.clock.t += 119 * MIN;
+  await s.admin.post('/v1/admin/sweep', {});
+  assert.equal((await s.db.first('SELECT status FROM purchase_order WHERE id = ?', o.body.order_id)).status, 'awaiting_payment');
+  const o2 = await buyOrder(s.api, { currency: 'INR', credits: 2000, order_ref: 'lk2' });
+  s.clock.t += 2 * 60 * MIN; // both orders are now past the lock
   await s.admin.post('/v1/admin/sweep', {});
   assert.equal((await s.db.first('SELECT status FROM purchase_order WHERE id = ?', o.body.order_id)).status, 'failed');
-  const c = await s.pay.post('/v1/rail/confirm', { order_id: o.body.order_id, payment_ref: 'late1', paid_minor: 1000, currency: 'USD' });
+  await refreshRates(s.db, { name: 't', async fetch() { return { rates: { INR: 80 } }; } }, day + DAY);
+  s.clock.t = day + DAY + 60000;
+  const c = await s.pay.post('/v1/rail/confirm', { order_id: o.body.order_id, payment_ref: 'late1', paid_minor: 140000, currency: 'INR' });
+  assert.equal(c.body.repriced, true);
+  assert.equal(c.body.credited, 1750); // Rs 1,400 at Rs 80 (flat) is 1,750 credits, never more than the money is worth now
+  void o2;
+});
+
+test('a late USD payment is credited in full (no rate involved)', async () => {
+  const s = await setup();
+  const o = await buyOrder(s.api);
+  s.clock.t += 3 * 60 * MIN;
+  await s.admin.post('/v1/admin/sweep', {});
+  const c = await s.pay.post('/v1/rail/confirm', { order_id: o.body.order_id, payment_ref: 'late2', paid_minor: 1000, currency: 'USD' });
   assert.equal(c.body.credited, 1000);
 });
 

@@ -20,60 +20,45 @@ async function alertAll(db, now, type, payload) {
 
 /**
  * Run once a day at 00:00 UTC. A day's rate is fixed: a second run on the same UTC day changes nothing.
- * A jump bigger than jumpPct versus the last good rate is held as 'pending_approval' until a person approves it.
- * A failed fetch keeps the last good rate and raises an alert.
+ * There is NO approval gate: a big but valid move is accepted. Only a rate that is missing, zero, negative or not
+ * a number is rejected: the last good rate is kept and an alert is raised. A failed fetch does the same.
  */
-export async function refreshRates(db, source, now, { jumpPct = 5 } = {}) {
+export async function refreshRates(db, source, now) {
   return db.tx(async (t) => {
     let fetched;
     try {
       fetched = await source.fetch();
-      if (!fetched || typeof fetched.rates !== 'object') throw new Error('bad rate source answer');
+      if (!fetched || typeof fetched.rates !== 'object' || fetched.rates === null) throw new Error('bad rate source answer');
     } catch (e) {
       await alertAll(t, now, 'fx.fetch_failed', { source: source.name, error: String(e.message).slice(0, 120) });
       return { ok: false, error: 'fetch_failed', results: {} };
     }
     const day = utcDayStart(now);
     const results = {};
+    const bad = [];
+    if (!('INR' in fetched.rates)) bad.push('INR');
     for (const [cur, v] of Object.entries(fetched.rates)) {
-      if (!/^[A-Z]{3}$/.test(cur) || !Number.isFinite(v) || v <= 0) {
+      if (!/^[A-Z]{3}$/.test(cur) || typeof v !== 'number' || !Number.isFinite(v) || v <= 0 || toX10000(v) < 1) {
         results[cur] = 'invalid';
+        bad.push(cur);
         continue;
       }
       const x = toX10000(v);
-      if (x < 1) {
-        results[cur] = 'invalid';
-        continue;
-      }
-      const same = await t.first('SELECT id FROM fx_rate WHERE currency = ? AND valid_from = ?', cur, day); // any row: the day is already decided
+      const same = await t.first('SELECT id FROM fx_rate WHERE currency = ? AND valid_from = ?', cur, day);
       if (same) {
         results[cur] = 'already_fixed';
         continue;
       }
       const prev = await t.first("SELECT rate_x10000 FROM fx_rate WHERE currency = ? AND status = 'active' ORDER BY valid_from DESC, id DESC LIMIT 1", cur);
-      const jump = prev ? (Math.abs(x - prev.rate_x10000) * 100) / prev.rate_x10000 : 0;
-      const status = jump > jumpPct ? 'pending_approval' : 'active';
+      const move = prev ? ((x - prev.rate_x10000) * 100) / prev.rate_x10000 : 0;
       await t.run(
-        'INSERT INTO fx_rate (currency, rate_x10000, source, fetched_at, valid_from, valid_to, margin_bps, status, note) VALUES (?,?,?,?,?,?,0,?,?)',
-        cur, x, source.name, now, day, day + DAY, status, status === 'pending_approval' ? `jump ${jump.toFixed(2)}% over ${jumpPct}%` : null,
+        "INSERT INTO fx_rate (currency, rate_x10000, source, fetched_at, valid_from, valid_to, margin_bps, status, note) VALUES (?,?,?,?,?,?,0,'active',?)",
+        cur, x, source.name, now, day, day + DAY, prev ? `moved ${move.toFixed(2)}% (recorded only, never blocks)` : null,
       );
-      results[cur] = status;
-      if (status === 'pending_approval') await alertAll(t, now, 'fx.jump_held', { currency: cur, jump_pct: Number(jump.toFixed(2)) });
+      results[cur] = 'active';
     }
-    return { ok: true, results };
-  });
-}
-
-/** A person approves a held rate: a new active row is appended (history is never edited). */
-export async function approveRate(db, id, now, approve = true) {
-  return db.tx(async (t) => {
-    const r = await t.first("SELECT * FROM fx_rate p WHERE id = ? AND status = 'pending_approval' AND NOT EXISTS (SELECT 1 FROM fx_rate q WHERE q.resolves = p.id)", id);
-    if (!r) return { ok: false, error: 'not_pending' };
-    await t.run(
-      'INSERT INTO fx_rate (currency, rate_x10000, source, fetched_at, valid_from, valid_to, margin_bps, status, note, resolves) VALUES (?,?,?,?,?,?,?,?,?,?)',
-      r.currency, r.rate_x10000, r.source, r.fetched_at, r.valid_from, r.valid_to, r.margin_bps, approve ? 'active' : 'rejected', `${approve ? 'approved' : 'rejected'} row ${id} at ${now}`, id,
-    );
-    return { ok: true };
+    if (bad.length) await alertAll(t, now, 'fx.rate_rejected', { source: source.name, currencies: bad.map((c) => String(c).slice(0, 8)) });
+    return { ok: bad.length === 0, results };
   });
 }
 

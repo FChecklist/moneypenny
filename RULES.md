@@ -15,12 +15,12 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `inr_paise_per_usd` | `7000` | Paise per US$1 (7000 = Rs 70). Used only until the daily rate table has a rate; after that the table (plus fx_margin_bps) is used. |
 | `base_currency` | `"INR"` | Currency a person pays in by default (INR or USD; nothing else can be paid in). |
 | `display_currency` | `null` | Optional third currency shown next to prices for information only (for example EUR). Never charged. |
-| `fx_margin_bps` | `0` | Margin added to the daily INR rate for this tenant, in basis points (100 = 1%). |
+| `fx_margin_bps` | `500` | Margin added to the daily INR rate for this tenant, in basis points (500 = 5%). |
 | `fx_max_age_hours` | `72` | How old the last good exchange rate may be before new INR orders are paused. |
 | `inr_round_to_rupee` | `1` | Round INR prices for credit orders up to a whole rupee. |
 | `buy_min_credits` | `100` | Smallest credit order (100 = US$1). |
 | `buy_max_credits` | `500000` | Largest single credit order (500000 = US$5,000). |
-| `order_expiry_minutes` | `60` | Minutes before an unpaid credit order is marked failed (a late payment is still credited at the locked rate). |
+| `rate_lock_minutes` | `120` | Minutes a credit order keeps the exchange rate it was made at. A payment that arrives later is still credited, re-priced at the then-current rate. |
 | `read_cache_max_age_seconds` | `300` | If the database fails, a balance seen this recently may still be shown (marked degraded). 0 = never. |
 | `bought_expiry_days` | `365` | Days a bought lot stays valid. 0 = no end. |
 | `bonus_expiry_days` | `365` | Days a bonus lot stays valid. 0 = no end. |

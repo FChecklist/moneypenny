@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { setup, bal, buy, DAY, MIN, T0 } from './helpers.js';
-import { refreshRates, approveRate, currentRate, utcDayStart, stubSource } from '../src/fx.js';
+import { refreshRates, currentRate, utcDayStart, stubSource } from '../src/fx.js';
 import { getSettings } from '../src/settings.js';
 
 const src = (rates, name = 'test') => ({ name, async fetch() { return { rates }; } });
@@ -12,6 +12,7 @@ const inr = (s) => currentRate(s.ctx(), 'INR', 72);
 
 test('rate is fixed for the UTC day: a second fetch changes nothing', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   const a = await refreshRates(s.db, src({ INR: 70 }), DAY0);
   assert.equal(a.results.INR, 'active');
   const b = await refreshRates(s.db, src({ INR: 70.9 }), DAY0 + 5 * 60 * MIN);
@@ -24,6 +25,7 @@ test('rate is fixed for the UTC day: a second fetch changes nothing', async () =
 
 test('00:00 UTC boundary: yesterday rate is "fresh" until midnight, then a fallback until the new one lands', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
   s.clock.t = DAY0 + DAY - 1; // 23:59:59.999
   assert.equal((await inr(s)).state, 'fresh');
@@ -41,6 +43,7 @@ test('00:00 UTC boundary: yesterday rate is "fresh" until midnight, then a fallb
 
 test('rate history cannot be edited or deleted', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
   await assert.rejects(() => s.db.run('UPDATE fx_rate SET rate_x10000 = 1'));
   await assert.rejects(() => s.db.run('DELETE FROM fx_rate'));
@@ -48,6 +51,7 @@ test('rate history cannot be edited or deleted', async () => {
 
 test('the table rate replaces the hand-typed one, and entries lock it', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   s.clock.t = DAY0 + 3600000;
   await refreshRates(s.db, src({ INR: 80 }), DAY0);
   assert.equal((await getSettings(s.ctx())).inr_paise_per_usd, 8000);
@@ -63,6 +67,7 @@ test('the table rate replaces the hand-typed one, and entries lock it', async ()
 
 test('margin per tenant, and the rupee rounding setting', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   s.clock.t = DAY0 + 3600000;
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
   await s.admin.put('/v1/admin/settings', { fx_margin_bps: 200 });
@@ -76,36 +81,49 @@ test('margin per tenant, and the rupee rounding setting', async () => {
   assert.equal(q.usd_minor, 333);
 });
 
-test('a jump over the sanity band is held for a person; approving appends, never edits', async () => {
+test('no approval gate: a big move is accepted at once and only recorded', async () => {
   const s = await setup();
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
-  const next = DAY0 + DAY + 3600000;
-  const r = await refreshRates(s.db, src({ INR: 80 }), next); // +14%
-  assert.equal(r.results.INR, 'pending_approval');
-  s.clock.t = next;
-  assert.equal((await inr(s)).units_per_usd, 70); // still the last good one
-  const alert = await s.db.first("SELECT * FROM outbox WHERE type = 'fx.jump_held'");
-  assert.ok(alert);
-  const held = await s.db.first("SELECT id FROM fx_rate WHERE status = 'pending_approval'");
-  assert.equal((await approveRate(s.db, held.id, next, true)).ok, true);
-  assert.equal((await inr(s)).units_per_usd, 80);
-  assert.equal((await approveRate(s.db, held.id, next, true)).ok, false); // nothing left to approve
-  assert.equal((await s.db.all("SELECT * FROM fx_rate WHERE currency = 'INR'")).length, 3);
+  const r = await refreshRates(s.db, src({ INR: 90 }), DAY0 + DAY + 3600000); // +28%
+  assert.equal(r.ok, true);
+  assert.equal(r.results.INR, 'active');
+  s.clock.t = DAY0 + DAY + 7200000;
+  assert.equal((await inr(s)).units_per_usd, 90);
+  const row = await s.db.first("SELECT note FROM fx_rate WHERE currency = 'INR' ORDER BY id DESC");
+  assert.match(row.note, /moved 28\.57%/);
+  assert.equal(await s.db.first("SELECT 1 x FROM fx_rate WHERE status = 'pending_approval'"), null);
 });
 
-test('a rejected jump never becomes the rate', async () => {
+test('the default margin on the rupee rate is 5%', async () => {
+  const s = await setup();
+  s.clock.t = DAY0 + 3600000;
+  await refreshRates(s.db, src({ INR: 70 }), DAY0);
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 500 });
+  assert.equal((await getSettings(s.ctx())).inr_paise_per_usd, 7350);
+  const fresh = await setup();
+  assert.equal((await getSettings(fresh.ctx())).fx_margin_bps, 500);
+});
+
+test('missing, zero, negative or non-numeric rates are rejected: last good rate kept, alert raised', async () => {
   const s = await setup();
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
-  const next = DAY0 + DAY;
-  await refreshRates(s.db, src({ INR: 140 }), next);
-  const held = await s.db.first("SELECT id FROM fx_rate WHERE status = 'pending_approval'");
-  await approveRate(s.db, held.id, next, false);
-  s.clock.t = next + 1000;
-  assert.equal((await inr(s)).units_per_usd, 70);
+  const next = DAY0 + DAY + 60000;
+  const r = await refreshRates(s.db, src({ INR: 0 }), next);
+  assert.equal(r.results.INR, 'invalid');
+  assert.equal(r.ok, false);
+  assert.ok(await s.db.first("SELECT 1 x FROM outbox WHERE type = 'fx.rate_rejected'"));
+  for (const bad of [-3, NaN, Infinity, '71', null]) assert.equal((await refreshRates(s.db, src({ INR: bad }), next)).results.INR, 'invalid');
+  const missing = await refreshRates(s.db, src({ EUR: 0.9 }), next); // no INR at all
+  assert.equal(missing.ok, false);
+  s.clock.t = next;
+  const cur = await inr(s);
+  assert.equal(cur.units_per_usd, 70); // yesterday's rate is kept
+  assert.equal(cur.state, 'fallback');
 });
 
 test('failed fetch: last good rate stays, an alert is raised, old rate becomes stale and pauses new INR orders (USD still works)', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
   const f = await refreshRates(s.db, failing, DAY0 + DAY);
   assert.equal(f.ok, false);
@@ -131,13 +149,14 @@ test('failed fetch: last good rate stays, an alert is raised, old rate becomes s
 
 test('an order keeps the rate it was made at, even when the rate changes before payment', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
-  s.clock.t = DAY0 + 3600000;
+  s.clock.t = DAY0 + DAY - 30 * 60000; // 23:30 UTC: the order is made just before the new day's rate
   const o = await s.api.post('/v1/buy_credits', { email: 'a@x.com', credits: 2000, currency: 'INR', order_ref: 'lk1' });
   assert.equal(o.body.amount_minor, 140000); // Rs 1,400
-  // next day the rate moves 3% (inside the band)
+  // at 00:00 UTC the rate moves 3%; the payment lands at 00:30, inside the 120-minute lock
   await refreshRates(s.db, src({ INR: 72.1 }), DAY0 + DAY);
-  s.clock.t = DAY0 + DAY + 3600000;
+  s.clock.t = DAY0 + DAY + 30 * 60000;
   assert.equal((await getSettings(s.ctx())).inr_paise_per_usd, 7210);
   const c = await s.pay.post('/v1/rail/confirm', { order_id: o.body.order_id, payment_ref: 'rzp_1', paid_minor: 140000, currency: 'INR' });
   assert.equal(c.body.credited, 2000);
@@ -151,6 +170,7 @@ test('an order keeps the rate it was made at, even when the rate changes before 
 
 test('a hold keeps its rate; the cash it collects is booked at that rate', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   await refreshRates(s.db, src({ INR: 70 }), DAY0);
   s.clock.t = DAY0 + 3600000;
   await buy(s.api, 'a@x.com', 100, 'p1');
@@ -167,6 +187,7 @@ test('a hold keeps its rate; the cash it collects is booked at that rate', async
 
 test('display helper: credits, US$, INR, and a display-only local figure with a "rate as of" stamp', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   s.clock.t = DAY0 + 3600000;
   await refreshRates(s.db, stubSource, DAY0);
   const q = (await s.read.get('/v1/quote?credits=2000&currency=EUR')).body;
@@ -187,6 +208,7 @@ test('display helper: credits, US$, INR, and a display-only local figure with a 
 
 test('bad rates from a source are ignored', async () => {
   const s = await setup();
+  await s.admin.put('/v1/admin/settings', { fx_margin_bps: 0 }); // flat rate unless a test says otherwise
   const r = await refreshRates(s.db, src({ INR: -5, XX: 3, EUR: 'a', GBP: 0 }), DAY0);
   assert.ok(Object.values(r.results).every((v) => v === 'invalid'));
   assert.equal((await s.db.all('SELECT * FROM fx_rate')).length, 0);

@@ -145,7 +145,7 @@ export async function processRail(ctx, rail, { orderId = null, limit = 25 } = {}
 /** Unpaid orders past their time are marked failed (a late payment is still credited, see railConfirm). */
 export async function expireOrders(ctx) {
   const s = await getSettings(ctx);
-  const r = await ctx.db.run("UPDATE purchase_order SET status = 'failed', updated_at = ? WHERE tenant_id = ? AND status = 'awaiting_payment' AND created_at + ? < ?", ctx.now(), ctx.tenantId, s.order_expiry_minutes * MIN, ctx.now());
+  const r = await ctx.db.run("UPDATE purchase_order SET status = 'failed', updated_at = ? WHERE tenant_id = ? AND status = 'awaiting_payment' AND created_at + ? < ?", ctx.now(), ctx.tenantId, s.rate_lock_minutes * MIN, ctx.now());
   return { expired: r.changes };
 }
 
@@ -183,10 +183,16 @@ export async function railConfirm(ctx, b) {
   if (b.currency !== o.currency) throw new ApiError(422, 'payment_mismatch', 'The payment currency does not match the order.');
   if (paid < o.amount_minor) throw new ApiError(422, 'payment_mismatch', 'The payment is less than the order amount.');
   const acc = await ctx.db.first('SELECT email_norm FROM account WHERE id = ?', o.account_id);
-  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: o.credits, paid_minor: paid, currency: o.currency, payment_ref: payRef }, { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr } });
+  // Inside the lock window the order's own rate and credits apply. Later, an INR payment is re-priced at today's rate
+  // (the money is in, so it is never refused); it can never buy more credits than the money is worth at that rate.
+  const s = await getSettings(ctx);
+  const late = ctx.now() > o.created_at + s.rate_lock_minutes * MIN;
+  const repriced = late && o.currency === 'INR';
+  const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
+  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: paid, currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr } });
   await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, updated_at = ? WHERE id = ?", payRef, ctx.now(), o.id);
   await ctx.db.run("UPDATE rail_outbox SET status = 'sent' WHERE order_id = ? AND status != 'sent'", o.id);
-  return { order_id: o.id, status: 'paid', credited: out.credited };
+  return { order_id: o.id, status: 'paid', credited: out.credited, ...(repriced ? { repriced: true } : {}) };
 }
 
 // ---------- health ----------
@@ -201,8 +207,7 @@ export async function railHealth(ctx) {
 
 export async function fxHealth(ctx) {
   const s = await getSettings(ctx);
-  const pending = await ctx.db.first("SELECT COUNT(*) n FROM fx_rate p WHERE status = 'pending_approval' AND NOT EXISTS (SELECT 1 FROM fx_rate q WHERE q.resolves = p.id)");
-  return { state: s.fx_state, as_of: s.fx_as_of ? new Date(s.fx_as_of).toISOString() : null, pending_approval: pending.n };
+  return { state: s.fx_state, as_of: s.fx_as_of ? new Date(s.fx_as_of).toISOString() : null };
 }
 
 export { isUniqueError, creditsFromMinor, currentRate };
