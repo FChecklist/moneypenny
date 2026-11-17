@@ -268,6 +268,10 @@
       "status": 503,
       "meaning": "The global off-switch has this service (or its reads or writes) switched off."
     },
+    "payment_already_used": {
+      "status": 409,
+      "meaning": "That payment was already used."
+    },
     "payment_conflict": {
       "status": 409,
       "meaning": "This payment id was already noted with different figures."
@@ -306,7 +310,7 @@
     },
     "rate_stale": {
       "status": 503,
-      "meaning": "The exchange rate is out of date. Try again shortly or pay in USD."
+      "meaning": "The exchange rate is out of date. Try again shortly."
     },
     "refunds_off": {
       "status": 403,
@@ -1151,6 +1155,8 @@
           "no_hold",
           "paused",
           "paused_global",
+          "payment_already_used",
+          "payment_not_verified",
           "payment_reversed",
           "rate_limited",
           "underpaid",

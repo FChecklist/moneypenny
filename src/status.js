@@ -9,6 +9,7 @@ export function checkStatus(st, { op, method, scope }) {
   if (scope === 'admin' && method === 'GET') return null; // a person can always look
   if (st == null) return scope === 'ai_read' ? { code: 'status_unknown', message: 'The off-switch could not be read, so AI access is paused.' } : null;
   const p = st.products && st.products[PRODUCT_CODE];
+  if (scope === 'ai_read' && !(st.hub && st.hub.mode) && !(p && p.mode)) return { code: 'status_unknown', message: 'The off-switch file has no mode, so AI access is paused.' };
   if ((st.hub && st.hub.mode && st.hub.mode !== 'on') || (p && p.mode && p.mode !== 'on')) return { code: 'paused_global', message: (p && p.reason) || 'This service is switched off for now.' };
   if (p) {
     if (p.reads_allowed === false && method === 'GET') return { code: 'paused_global', message: 'Reading is switched off for now.' };

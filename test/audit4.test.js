@@ -354,3 +354,87 @@ test('A7-6. a webhook secret is shown once, even to a replay of the same call', 
   const m = secret.match(/"secret":"([^"]+)"/);
   if (m) assert.ok(!JSON.stringify(b.body).includes(m[1]));
 });
+
+// ---------- audit 8 ----------
+test('A8-1. spend, return, spend again, then refund the sale: nothing of it survives', async () => {
+  const s = await setup();
+  await buy(s.api, 'b@y.com', 10000, 'PR1');
+  await sale(s.api, { sale_ref: 'PR1', cash_minor: 10000, noNotice: true }); // 1000 commission
+  s.clock.t += 8 * 24 * HOUR;
+  const o1 = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'g1', amount_minor: 1000, currency: 'USD' });
+  await s.api.post('/v1/spend/capture', { hold_id: o1.body.hold_id });
+  await s.api.post('/v1/refund', { type: 'order', hold_id: o1.body.hold_id }); // returned: a second-generation lot
+  const o2 = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'g2', amount_minor: 1000, currency: 'USD' });
+  await s.api.post('/v1/spend/capture', { hold_id: o2.body.hold_id });
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'PR1' });
+  await s.api.post('/v1/refund', { type: 'order', hold_id: o2.body.hold_id });
+  assert.equal((await s.db.first("SELECT COALESCE(SUM(remaining),0) n FROM lot WHERE bucket = 'commission'")).n, 0);
+});
+
+test('A8-1b. reject, convert again, refund the sale: approve is refused', async () => {
+  const s = await setup();
+  await s.admin.put('/v1/admin/settings', { conversion_enabled: true, tds_rate_bps: 1000 });
+  await buy(s.api, 'b@y.com', 20000, 'PR2');
+  await sale(s.api, { sale_ref: 'PR2', cash_minor: 20000, noNotice: true });
+  s.clock.t += 40 * 24 * HOUR;
+  const c1 = await s.api.post('/v1/convert_request', { email: 'a@x.com', credits: 2000 });
+  await s.admin.post(`/v1/admin/conversions/${c1.body.request_id}/reject`, {});
+  const c2 = await s.api.post('/v1/convert_request', { email: 'a@x.com', credits: 2000 });
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'PR2', credits: 10000 });
+  assert.equal((await s.admin.post(`/v1/admin/conversions/${c2.body.request_id}/approve`, {})).body.error.code, 'payment_reversed');
+});
+
+test('A8-2. a refund of a payment that bought no credits still reverses what it unlocked and earned', async () => {
+  const s = await setup();
+  await buy(s.api, 'a@x.com', 1000, 'p1');
+  const r = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'g8', amount_minor: 3400, currency: 'USD' });
+  await note(s.api, 'ORD1', r.body.cash_due_minor, 'USD', 'a@x.com');
+  await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id, payment_ref: 'ORD1', cash_paid_minor: r.body.cash_due_minor });
+  const before = (await s.db.first("SELECT paid_credits p FROM account WHERE email_norm = 'a@x.com'")).p;
+  const x = await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'ORD1' });
+  assert.equal(x.status, 200);
+  const after = await s.db.first("SELECT paid_credits p, status FROM account WHERE email_norm = 'a@x.com'");
+  assert.ok(after.p < before);
+  assert.equal(after.status, 'active'); // a refund does not pause anyone
+});
+
+test('A8-3. conversions pause while the exchange rate is out of date', async () => {
+  const { refreshRates } = await import('../src/fx.js');
+  const s = await setup();
+  await s.admin.put('/v1/admin/settings', { conversion_enabled: true, tds_rate_bps: 1000 });
+  s.clock.t += 60 * 24 * HOUR; // no fresh rate for two months
+  const r = await s.api.post('/v1/convert_request', { email: 'a@x.com', credits: 2000 });
+  assert.ok([503, 404, 422].includes(r.status));
+});
+
+test('A8-4. an off-switch file with no mode does not open AI keys', async () => {
+  const { checkStatus } = await import('../src/status.js');
+  for (const st of [{}, { error: 'x' }, { products: {} }]) assert.equal(checkStatus(st, { op: null, method: 'GET', scope: 'ai_read' })?.code, 'status_unknown');
+  assert.equal(checkStatus({ hub: { mode: 'on' } }, { op: null, method: 'GET', scope: 'ai_read' }), null);
+});
+
+test('A8-5. the contract lists the capture errors', async () => {
+  const { buildContract } = await import('../scripts/gen-contract.js');
+  const c = buildContract();
+  assert.ok(c['x-error-codes'].payment_already_used);
+  assert.ok(c.paths['/v1/spend/capture'].post['x-error-codes'].includes('payment_not_verified'));
+});
+
+test('A8-6. currency words inside a longer name are refused', async () => {
+  const s = await setup();
+  for (const v of ['US Dollar', 'Dollar Coins', 'USD credits', 'Pesos', 'Bucks']) assert.equal((await s.admin.put('/v1/admin/settings', { currency_name: v })).status, 400, v);
+});
+
+test('A8-7. a chargeback that arrives before the payment blocks that payment later', async () => {
+  const s = await setup();
+  assert.equal((await s.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'EARLY1' })).body.recorded, true);
+  assert.equal((await s.pay.post('/v1/payment_notice', { payment_ref: 'EARLY1', paid_minor: 100, currency: 'USD', payer_email: 'a@x.com' })).body.error.code, 'payment_reversed');
+  assert.equal((await buy(s.api, 'a@x.com', 100, 'EARLY1')).body.error.code, 'payment_reversed');
+});
+
+test('A8-8. a credit purchase must be for the account that paid, when the payment was noted', async () => {
+  const s = await setup();
+  await note(s.api, 'WHO1', 100, 'USD', 'payer@x.com');
+  assert.equal((await buy(s.api, 'someone@else.com', 100, 'WHO1')).body.error.code, 'payment_conflict');
+  assert.equal((await buy(s.api, 'payer@x.com', 100, 'WHO1')).status, 200);
+});

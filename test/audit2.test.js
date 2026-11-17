@@ -46,7 +46,8 @@ test('chargeback of a sale removes its commission and does not pause the earner'
   assert.equal(c.body.account_status, 'unchanged');
   assert.equal((await bal(s.api, 'a@x.com')).balance, 0);
   assert.equal((await s.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'pay_S9' })).body.already, true);
-  assert.equal((await s.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'never-seen' })).status, 404);
+  const unseen = await s.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'never-seen' });
+  assert.equal(unseen.body.recorded, true); // remembered, so that payment cannot be used if it shows up later
   await buy(s.api, 'a@x.com', 100, 'p1'); // earner is not frozen
   assert.equal((await bal(s.api, 'a@x.com')).balance, 100);
   assert.deepEqual(await verifyBalances(s.ctx()), []);

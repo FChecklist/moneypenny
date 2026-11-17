@@ -132,6 +132,7 @@ export async function paymentNotice(ctx, b) {
   if (cur !== 'INR' && cur !== 'USD') throw new ApiError(400, 'bad_currency', 'Payment is in INR or USD only.');
   if (!b.payer_email) throw new ApiError(400, 'bad_request', 'payer_email is required: say who paid.');
   const payer = canonEmail(emailOrThrow(b.payer_email));
+  if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, r)) throw new ApiError(409, 'payment_reversed', 'That payment was taken back.');
   const prior = await ctx.db.first('SELECT paid_minor, currency, payer_canon FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
   if (prior) {
     if (prior.paid_minor !== paid || prior.currency !== cur || prior.payer_canon !== payer) throw new ApiError(409, 'payment_conflict', 'This payment id was already noted with different figures.');
@@ -163,6 +164,8 @@ export async function creditPurchase(ctx, b, { lock = null } = {}) {
   if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, payRef)) throw new ApiError(409, 'payment_reversed', 'That payment was taken back.');
   if (creditsFromMinor(s, currency, paidMinor) < amount) throw new ApiError(422, 'amount_exceeds_payment', 'More credits than the payment covers.');
   // A paused account may still be credited: the money has already been taken, so the credits must exist.
+  const noted = await ctx.db.first('SELECT payer_canon FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef);
+  if (noted && noted.payer_canon !== canonEmail(emailOrThrow(b.email))) throw new ApiError(409, 'payment_conflict', 'That payment was made by someone else.');
   const acc = await ensureAccount(ctx, b.email);
   await claimPaymentRef(ctx, payRef, 'purchase');
   const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bought', amount, source: 'purchase', sourceRef: payRef, origin: payRef, expiresAt: expiryFor(s, 'bought', ctx.now()), paidMinor, currency, kind: 'purchase', extRef: payRef, ...(lock || {}) });

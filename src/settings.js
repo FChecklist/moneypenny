@@ -91,11 +91,12 @@ export async function getSettings(ctx) {
 
 /** Normalised for checking: compatibility forms folded, accents and invisible characters removed, look-alike letters and digits mapped, lower case. */
 const CONFUSE = { '0': 'o', '1': 'l', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '\u0430': 'a', '\u0435': 'e', '\u043e': 'o', '\u0440': 'p', '\u0441': 'c', '\u0445': 'x', '\u0443': 'y', '\u0456': 'i', '\u03bf': 'o', '\u03b1': 'a', '\u0455': 's', '\u043a': 'k', '\u043c': 'm', '\u0442': 't', '\u0432': 'b', '\u043d': 'h', '\u0192': 'f', '\ua730': 'f', '\u1d00': 'a', '\u1d0b': 'k', '\u1d07': 'e' };
-const squash = (t) =>
-  [...String(t).normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cc}]/gu, '').toLowerCase()].map((c) => CONFUSE[c] ?? c).join('').replace(/[^a-z]+/g, '');
+const fold = (t) => [...String(t).normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cc}]/gu, '').toLowerCase()].map((c) => CONFUSE[c] ?? c).join('');
+const squash = (t) => fold(t).replace(/[^a-z]+/g, '');
+const tokens = (t) => fold(t).split(/[^a-z]+/).filter((w) => w.length > 1);
 const WORDS = [['fa', 'ke'], ['pre', 'tend'], ['worth', 'less'], ['ju', 'nk'], ['tra', 'sh'], ['use', 'less'], ['play', 'money'], ['toy', 'money'], ['mono', 'poly'], ['pho', 'ny'], ['sc', 'am'], ['bo', 'gus'], ['dum', 'my'], ['sh', 'am'], ['imita', 'tion']].map((x) => x.join(''));
 const BAD_WORDS = new RegExp(WORDS.join('|'));
-const CURRENCY_WORDS = ['dollar', 'dollars', 'euro', 'euros', 'rupee', 'rupees', 'pound', 'pounds', 'yen', 'yuan', 'dirham', 'dinar', 'franc', 'peso', 'rand', 'bitcoin', 'ether', 'ethereum', 'tether', 'usdt', 'usdc', 'btc', 'eth', 'rs', 'us', 's', 'c', 'e'];
+const CURRENCY_WORDS = ['dollar', 'dollars', 'euro', 'euros', 'rupee', 'rupees', 'pound', 'pounds', 'yen', 'yuan', 'dirham', 'dinar', 'franc', 'peso', 'rand', 'bucks', 'buck', 'pesos', 'rupiah', 'bitcoin', 'ether', 'ethereum', 'tether', 'usdt', 'usdc', 'btc', 'eth', 'rs', 'us', 's', 'c', 'e'];
 const CURRENCY_CODES = (() => {
   try { return Intl.supportedValuesOf('currency').map((x) => x.toLowerCase()); } catch { return ['usd', 'inr', 'eur', 'gbp', 'aed', 'jpy', 'cad', 'aud', 'chf', 'sgd', 'cny']; }
 })();
@@ -121,7 +122,7 @@ export function validate(key, value) {
       if (typeof value !== 'string' || !value.length || value.length > 120) throw bad('text up to 120 characters');
       if (/[<>]/.test(value)) throw bad('no angle brackets');
       if (BAD_WORDS.test(squash(value))) throw bad('this wording is not allowed');
-      if (['currency_name', 'unit_label', 'unit_symbol'].includes(key) && (/\p{Sc}/u.test(value.normalize('NFKC')) || CURRENCY_LIKE.test(squash(value)))) throw bad('a currency sign or code cannot be the name or label (the real-money amount always shows next to it)');
+      if (['currency_name', 'unit_label', 'unit_symbol'].includes(key) && (/\p{Sc}/u.test(value.normalize('NFKC')) || CURRENCY_LIKE.test(squash(value)) || tokens(value).some((w) => CURRENCY_LIKE.test(w)))) throw bad('a currency sign or code cannot be the name or label (the real-money amount always shows next to it)');
       if (key === 'unit_symbol' && (/\p{Sc}/u.test(value.normalize('NFKC')) || /^[\s\p{Sc}\p{Cf}]*$/u.test(value) || !/^[A-Za-z0-9]{2,6}$/.test(value))) throw bad('the symbol is 1 to 6 letters or digits (or "coin"), never a currency sign');
       return value;
     case 'url':

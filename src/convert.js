@@ -10,7 +10,7 @@ import { post } from './ledger.js';
 import { emit } from './outbox.js';
 import { audit } from './audit.js';
 import { createLot, claimPaymentRef, findPayment, payId } from './wallet.js';
-import { isReversed, withholdDebt } from './spend.js';
+import { isReversed, withholdDebt, saleOwed } from './spend.js';
 
 /** Pure calculation. gross is in the conversion currency; tds and gst come from settings; no rounding in the person's disfavour on net. */
 export function calculate(s, credits) {
@@ -32,6 +32,7 @@ export async function convertRequest(ctx, b) {
   const acc = await findAccount(ctx, b.email);
   if (!acc) throw new ApiError(404, 'no_account', 'No such person.');
   if (acc.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
+  if (s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly.');
   const credits = int(b.credits, 'credits', { min: 1 });
   if (credits < s.conversion_min_credits) throw new ApiError(422, 'below_minimum', `The smallest request is ${s.conversion_min_credits} credits.`);
   const now = ctx.now();
@@ -85,7 +86,7 @@ export async function conversionAction(ctx, id, action, b = {}) {
   if (action === 'approve' || action === 'instruct') {
     // credits that came from a payment the bank took back must not become a payout
     for (const p of await ctx.db.all('SELECT origin, lot_id FROM conversion_part WHERE request_id = ?', id)) {
-      if (((await ctx.db.first('SELECT refunded_credits r FROM lot WHERE id = ?', p.lot_id))?.r ?? 0) > 0) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a sale that was refunded. Reject this request.');
+      if ((await saleOwed(ctx, p.lot_id)) > 0) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a sale that was refunded. Reject this request.');
       if ((await isReversed(ctx, p.origin)) || (p.origin && !(await findPayment(ctx, p.origin.replace(/^sale:/i, ''))))) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was taken back. Reject this request.');
     }
   }

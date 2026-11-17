@@ -123,7 +123,8 @@ test('tenants cannot see or touch each other', async () => {
   assert.equal((await b.post('/v1/spend/release', { hold_id: r.body.hold_id })).status, 404);
   assert.equal((await b.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'pay-1' })).status, 404);
   assert.equal((await b.post('/v1/refund', { type: 'order', hold_id: r.body.hold_id })).status, 404);
-  assert.equal((await b.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'pay-1' })).status, 404);
+  const cbOther = await b.pay.post('/v1/refund', { type: 'chargeback', payment_ref: 'pay-1-x' }); // unknown to tenant B: only noted there
+  assert.equal(cbOther.body.removed_credits, 0);
   assert.equal((await bal(s.api, 'a@x.com')).balance, 500); // untouched
   // the same payment reference and e-mail are independent per tenant
   assert.equal((await buy(b, 'a@x.com', 700, 'pay-1')).status, 200);

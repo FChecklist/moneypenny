@@ -30,13 +30,24 @@ function allocate(lots, limit, bonusCap, canUseBonus) {
 }
 const sum = (parts) => parts.reduce((a, p) => a + p.take, 0);
 
-/** Credits a refund still claims from this lot (the sale was refunded while they were held or spent). They are never given back. */
+const saleOf = (origin) => (origin && /^sale:/i.test(origin) ? origin.slice(5).toLowerCase() : null);
+/** Credits a refund of the sale still claims (they were held, spent or in a conversion when it was refunded). 0 if none. */
+export async function saleOwed(ctx, lotId) {
+  const l = await ctx.db.first('SELECT origin FROM lot WHERE id = ?', lotId);
+  const ref = saleOf(l?.origin);
+  if (!ref) return 0;
+  return (await ctx.db.first('SELECT owed FROM sale_reversal WHERE tenant_id = ? AND ref = ?', ctx.tenantId, ref))?.owed ?? 0;
+}
+/** Credits given back from a hold, a returned order or a rejected conversion: whatever the sale's refund still claims is kept back. */
 export async function withholdDebt(ctx, lotId, amount, ref, accountId, bucket) {
   if (bucket !== 'commission') return amount;
-  const lot = await ctx.db.first('SELECT refunded_credits FROM lot WHERE id = ?', lotId);
-  const withheld = Math.min(amount, lot?.refunded_credits ?? 0);
+  const l = await ctx.db.first('SELECT origin FROM lot WHERE id = ?', lotId);
+  const sale = saleOf(l?.origin);
+  if (!sale) return amount;
+  const row = await ctx.db.first('SELECT owed FROM sale_reversal WHERE tenant_id = ? AND ref = ?', ctx.tenantId, sale);
+  const withheld = Math.min(amount, row?.owed ?? 0);
   if (withheld > 0) {
-    await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits - ? WHERE id = ?', withheld, lotId);
+    await ctx.db.run('UPDATE sale_reversal SET owed = owed - ? WHERE tenant_id = ? AND ref = ?', withheld, ctx.tenantId, sale);
     await post(ctx, { accountId, bucket, delta: 0, kind: 'reversal', ref, lotId, meta: { not_restored: withheld, refunded_sale: true } });
   }
   return amount - withheld;
@@ -162,7 +173,7 @@ export async function capture(ctx, b) {
   const parts = await partsOf(ctx, h.id);
   for (const p of parts) {
     if (await isReversed(ctx, p.origin)) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was reversed. Release this hold.');
-    if (p.bucket === 'commission' && ((await ctx.db.first('SELECT refunded_credits r FROM lot WHERE id = ?', p.lot_id))?.r ?? 0) > 0) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a sale that was refunded. Release this hold.');
+    if (p.bucket === 'commission' && (await saleOwed(ctx, p.lot_id)) > 0) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a sale that was refunded. Release this hold.');
   }
   let payRef = null;
   if (h.cash_due_minor > 0) {
@@ -292,7 +303,11 @@ async function refundPurchase(ctx, b) {
   if (!s.refund_money_enabled) throw new ApiError(403, 'refunds_off', 'Money refunds are switched off.');
   const payRef = payId(b.payment_ref);
   const lot = await ctx.db.first("SELECT * FROM lot WHERE tenant_id = ? AND source = 'purchase' AND lower(source_ref) = ?", ctx.tenantId, payRef);
-  if (!lot) throw new ApiError(404, 'no_purchase', 'No such purchase.');
+  if (!lot) {
+    // a payment that paid an order's cash part or earned a commission (no credits bought): same reversal as a chargeback, nobody is paused
+    if (await ctx.db.first('SELECT 1 x FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef)) return { ...(await chargeback(ctx, { payment_ref: payRef }, { freeze: false })), returned_credits: 0, money_due_minor: 0 };
+    throw new ApiError(404, 'no_purchase', 'No such purchase.');
+  }
   if (lot.expires_at != null && lot.expires_at <= ctx.now()) throw new ApiError(409, 'purchase_expired', 'These credits have ended.');
   const want = b.credits == null ? lot.remaining : int(b.credits, 'credits', { min: 1 });
   if (want < 1 || want > lot.remaining) throw new ApiError(409, 'credits_already_used', `Only ${lot.remaining} unspent credits can be refunded.`, { refundable_credits: lot.remaining });
@@ -319,15 +334,8 @@ async function refundPurchase(ctx, b) {
         await post(ctx, { accountId: c.account_id, bucket: c.bucket, delta: -take, kind: 'reversal', ref: payRef, lotId: c.id, extRef: payRef, status: 'reversed', meta: { refund_of_sale: true } });
         need -= take;
       }
-      for (const c of sources) {
-        if (need < 1) break;
-        const room = c.original - c.refunded_credits;
-        const owe = Math.min(need, Math.max(0, room));
-        if (owe < 1) continue;
-        await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits + ? WHERE id = ?', owe, c.id);
-        need -= owe;
-      }
-      await ctx.db.run('INSERT INTO sale_reversal (tenant_id, ref, clawed) VALUES (?,?,?) ON CONFLICT (tenant_id, ref) DO UPDATE SET clawed = excluded.clawed', ctx.tenantId, payRef, target);
+      if (need > 0) await ctx.db.run('INSERT INTO sale_reversal (tenant_id, ref, clawed, owed) VALUES (?,?,0,?) ON CONFLICT (tenant_id, ref) DO UPDATE SET owed = owed + excluded.owed', ctx.tenantId, payRef, need);
+      await ctx.db.run('INSERT INTO sale_reversal (tenant_id, ref, clawed, owed) VALUES (?,?,?,0) ON CONFLICT (tenant_id, ref) DO UPDATE SET clawed = excluded.clawed', ctx.tenantId, payRef, target);
     }
   }
   await flagConversions(ctx, payRef);
@@ -341,15 +349,20 @@ async function refundPurchase(ctx, b) {
  * Bank took the money back. Everything that came from that payment is removed: what is left in the
  * purchase lot, anything returned from orders later, and anything still held (not restored on release).
  */
-async function chargeback(ctx, b) {
+async function chargeback(ctx, b, { freeze = true } = {}) {
   const payRef = payId(b.payment_ref);
   // The payment may have bought credits, or it may be the sale that earned a commission (or both ids may never have been seen).
   const lot = await ctx.db.first("SELECT * FROM lot WHERE tenant_id = ? AND source = 'purchase' AND lower(source_ref) = ?", ctx.tenantId, payRef);
   const sale = await ctx.db.first('SELECT 1 x FROM payment_ref WHERE tenant_id = ? AND ref = ?', ctx.tenantId, `sale:${payRef}`);
   const noted = await ctx.db.first('SELECT 1 x FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef);
-  if (!lot && !sale && !noted) throw new ApiError(404, 'no_purchase', 'No such purchase or sale.');
+  const seen0 = !lot && !sale && !noted;
   const seen = await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, payRef);
   if (seen) return { removed_credits: 0, account_status: lot ? 'frozen' : 'unchanged', already: true };
+  // a chargeback for a payment nobody has noted yet is remembered, so the payment cannot be used when it shows up later
+  if (seen0) {
+    await ctx.db.run('INSERT INTO charged_back (tenant_id, payment_ref, created_at) VALUES (?,?,?)', ctx.tenantId, payRef, ctx.now());
+    return { removed_credits: 0, account_status: 'unchanged', recorded: true };
+  }
   await ctx.db.run('INSERT INTO charged_back (tenant_id, payment_ref, created_at) VALUES (?,?,?)', ctx.tenantId, payRef, ctx.now());
   const family = await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND (lower(origin) = ? OR lower(origin) = ?) AND remaining > 0", ctx.tenantId, payRef, `sale:${payRef}`);
   let removed = 0;
@@ -363,8 +376,10 @@ async function chargeback(ctx, b) {
   for (const h of await ctx.db.all("SELECT * FROM hold WHERE tenant_id = ? AND status = 'captured' AND lower(payment_ref) = ?", ctx.tenantId, payRef)) {
     const s = await getSettings(ctx);
     await addPaid(ctx, h.account_id, -creditsFromMinor(h.rate_inr ? { ...s, credits_per_usd: h.rate_cpu, inr_paise_per_usd: h.rate_inr } : s, h.currency, h.cash_due_minor));
-    await ctx.db.run("UPDATE account SET status = 'frozen' WHERE id = ?", h.account_id);
-    await audit(ctx, 'account.freeze', { account_id: h.account_id, reason: 'chargeback_order', payment_ref: payRef });
+    if (freeze) {
+      await ctx.db.run("UPDATE account SET status = 'frozen' WHERE id = ?", h.account_id);
+      await audit(ctx, 'account.freeze', { account_id: h.account_id, reason: 'chargeback_order', payment_ref: payRef });
+    }
   }
   if (!lot) {
     // a sale was taken back: the commission it earned goes, the earner is not paused

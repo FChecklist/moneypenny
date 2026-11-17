@@ -59,6 +59,7 @@ CREATE TABLE conversion_part (
 CREATE TABLE sale_reversal (
   tenant_id TEXT NOT NULL REFERENCES tenant(id),
   ref TEXT NOT NULL,
-  clawed INTEGER NOT NULL DEFAULT 0,
+  clawed INTEGER NOT NULL DEFAULT 0,   -- commission already taken back
+  owed INTEGER NOT NULL DEFAULT 0,     -- commission a refund still claims but that is held, spent or in a conversion: it is never given back
   PRIMARY KEY (tenant_id, ref)
 );
