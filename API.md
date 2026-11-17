@@ -17,7 +17,7 @@ signature = hex( HMAC-SHA256( secret, [timestamp, nonce, METHOD, pathWithQuery, 
 - Every POST/PUT/DELETE also needs `Idempotency-Key` (up to 120 characters); for `credit_purchase` the payment id is used when the header is left out. Same key and same request returns the first answer (`idempotent-replay: true`). Same key and a different request gives 409. A failed call leaves no trace, so its key can be reused.
 - Callers must send only **verified** e-mail addresses. Identity is the lower-cased e-mail.
 
-`GET /health` (open): `ok, db, rail{name,ok}, fx{state,as_of}, outbox{rail_pending, rail_dead, webhooks_pending}`. No tenant data.
+`GET /health` (open): `ok, db, rail{name,ok}, fx{state,as_of}; nothing about any tenant`. No tenant data.
 Idempotency keys starting `pay:` are reserved for the payment routes and must equal `pay:<payment_ref>`.
 
 ## Money units

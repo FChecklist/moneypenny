@@ -10,6 +10,7 @@ import { post } from './ledger.js';
 import { emit } from './outbox.js';
 import { audit } from './audit.js';
 import { createLot, claimPaymentRef, findPayment, payId } from './wallet.js';
+import { withTimeout } from './gate.js';
 import { isReversed, withholdDebt, saleOwed } from './spend.js';
 
 /** Pure calculation. gross is in the conversion currency; tds and gst come from settings; no rounding in the person's disfavour on net. */
@@ -98,7 +99,7 @@ export async function conversionAction(ctx, id, action, b = {}) {
   }
   if (action === 'instruct') {
     if (r.status !== 'approved') throw stale();
-    const out = await ctx.rail.instruct({ request_id: id, currency: r.currency, net_minor: r.net_minor, gross_minor: r.gross_minor, tds_minor: r.tds_minor });
+    const out = await withTimeout(ctx.rail.instruct({ request_id: id, currency: r.currency, net_minor: r.net_minor, gross_minor: r.gross_minor, tds_minor: r.tds_minor }), 4000).catch(() => { throw new ApiError(502, 'rail_unavailable', 'The payment side did not answer. Try again.'); });
     await setStatus(ctx, id, 'approved', 'instructed', { railRef: out.ref });
     await audit(ctx, 'conversion.instruct', { id, rail: ctx.rail.name, rail_ref: out.ref, executed: !!out.executed });
     return { id, status: 'instructed', rail: ctx.rail.name, rail_ref: out.ref, executed: !!out.executed };

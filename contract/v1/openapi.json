@@ -296,6 +296,10 @@
       "status": 409,
       "meaning": "These credits have ended."
     },
+    "rail_unavailable": {
+      "status": 502,
+      "meaning": "The payment side did not answer. Try again."
+    },
     "rate_change_too_big": {
       "status": 422,
       "meaning": "The INR rate can move by at most 10% in one change."

@@ -237,6 +237,7 @@ export async function processEvent(ctx, b) {
     if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, saleRef)) return reject(ctx, ev, 'sale_reversed', rb);
     if (pay.currency !== b.currency || b.cash_minor > pay.paid_minor) return { granted: 0, reason: 'cash_exceeds_payment' };
     if (await ctx.db.first('SELECT 1 x FROM payment_ref WHERE tenant_id = ? AND ref = ?', ctx.tenantId, `sale:${saleRef}`)) return reject(ctx, ev, 'sale_already_used', rb);
+    if (b.currency === 'INR' && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly.');
     const cash = creditsFromMinor(s, b.currency, b.cash_minor);
     amount = Math.floor((cash * rule.amount) / 10000);
     if (amount < 1) return reject(ctx, ev, 'amount_zero', rb);

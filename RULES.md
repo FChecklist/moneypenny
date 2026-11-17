@@ -8,9 +8,10 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | Setting | Starting value | Meaning |
 |---|---|---|
 | `product_name` | `"Corporate Moneypenny"` | Public product name shown to people. |
-| `currency_name` | `"Moneypenny Credits"` | Name of the credit currency shown to people (a tenant can rename it). |
-| `unit_label` | `"credits"` | Word used after a number of credits. |
-| `unit_symbol` | `"MC"` | Short symbol for the currency. It is never a dollar sign. |
+| `currency_name` | `"Moneypenny"` | Name of the currency shown to people (a tenant can rename it). |
+| `unit_label` | `"moneypenny"` | Word used after a number (lower case). |
+| `unit_symbol` | `"coin"` | Symbol. 'coin' shows the built-in coin icon; any other text is shown as is. Never a bare dollar sign. |
+| `terms_url` | `null` | Link to the terms (an artificial in-product currency for these websites only). Shown next to the balance. |
 | `credits_per_usd` | `100` | Credits per US$1 (100 = one credit is one cent). |
 | `inr_paise_per_usd` | `7000` | Paise per US$1 (7000 = Rs 70). Used only until the daily rate table has a rate; after that the table (plus fx_margin_bps) is used. |
 | `base_currency` | `"INR"` | Currency a person pays in by default (INR or USD; nothing else can be paid in). |
@@ -50,6 +51,11 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `account_events_per_day` | `20` | Earning events counted per person per 24 hours. |
 | `new_accounts_per_hour` | `100` | New people created by earning events per hour. |
 | `tenant_daily_bonus_cap` | `50000` | Most bonus credits given across the whole tenant per 24 hours. |
+| `kill_switch` | `0` | Tenant off-switch. When 1 every call except admin keys is refused (503 paused). |
+| `ai_enabled` | `1` | When 0 every AI key is refused (403 ai_off). |
+| `ai_rate_per_minute` | `60` | Signed calls an AI key may make per minute. |
+| `ai_pending_max` | `20` | Most requests one AI key may have waiting for a person. |
+| `ai_approval_ttl_hours` | `24` | Hours a request from an AI key waits for a person before it runs out. |
 | `api_rate_per_minute` | `600` | Signed calls allowed per key per minute. |
 | `wording_convert_line` | `"You can convert {amount}"` | Line under the balance. {amount} is filled in with credits and their US$ value. |
 | `wording_settling_line` | `"Settling soon: {amount}"` | Line for credits still settling. {amount} is filled in. |

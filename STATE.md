@@ -8,7 +8,7 @@
 - Cloudflare executor: one SQLite-backed Durable Object (`src/do.js`, `src/worker.js`), not plain D1 (D1 has no interactive transactions).
 
 ## Tests
-- 247 tests pass (`npm test`), also on the Durable Object adapter with `MNP_DB=do npm test`. The adapter is tested only against a stand-in for Cloudflare's storage.
+- 249 tests pass (`npm test`), also on the Durable Object adapter with `MNP_DB=do npm test`. The adapter is tested only against a stand-in for Cloudflare's storage.
 
 ## Audit rounds
 | Round | Verdict | Notes |
@@ -19,7 +19,8 @@
 | 6 | FAIL, 10 findings | fixed (refund debt at every reinstate point and at capture, payer required, stronger wording rules, admin page signing, atomic migrations, AI fail-closed without a switch) |
 | 7 | FAIL, 7 findings (no minting; refund proportion, wording list, AI default) | fixed |
 | 8 | FAIL, 6 findings (refund debt in re-issued lots, stale-rate conversions, AI status shape, wording) | fixed, plus random-sequence refund tests |
-| 9 | pending | fresh independent auditor on the final code |
+| 9 | FAIL (off-switch failed open on a Hub outage; Worker used stub rail; instruct had no timeout; chargeback skipped spent-commission debt; rounding; docs) | fixed |
+| 10 | pending | fresh independent auditor on the final code |
 
 A second independent PASS on the exact final code is still needed before reporting done.
 

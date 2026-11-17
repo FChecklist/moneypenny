@@ -24,3 +24,17 @@ export const stubRail = {
     return { ref: `STUB-${req.request_id}`, executed: false };
   },
 };
+
+/** Used by the deployed Worker until a real payment side is connected: money routes refuse instead of pretending. */
+export const unconfiguredRail = {
+  name: 'not_configured',
+  async createOrder() {
+    throw new Error('rail_not_configured');
+  },
+  async health() {
+    return { ok: false };
+  },
+  async instruct() {
+    throw new Error('rail_not_configured');
+  },
+};

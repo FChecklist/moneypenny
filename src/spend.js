@@ -312,7 +312,8 @@ async function refundPurchase(ctx, b) {
   const want = b.credits == null ? lot.remaining : int(b.credits, 'credits', { min: 1 });
   if (want < 1 || want > lot.remaining) throw new ApiError(409, 'credits_already_used', `Only ${lot.remaining} unspent credits can be refunded.`, { refundable_credits: lot.remaining });
   // Money per credit is what was paid; rounded in the person's favour, never more than is left to refund.
-  const money = Math.min(lot.paid_minor - lot.refunded_minor, Math.ceil((lot.paid_minor * want) / lot.original));
+  const doneCr = lot.refunded_credits + want;
+  const money = Math.max(0, Math.min(lot.paid_minor - lot.refunded_minor, (doneCr >= lot.original ? lot.paid_minor : Math.floor((lot.paid_minor * doneCr) / lot.original)) - lot.refunded_minor));
   const r = await ctx.db.run('UPDATE lot SET remaining = remaining - ?, refunded_minor = refunded_minor + ?, refunded_credits = refunded_credits + ? WHERE id = ? AND remaining >= ?', want, money, want, lot.id, want);
   if (r.changes !== 1) throw new ApiError(409, 'balance_changed', 'Balance changed. Try again.');
   // Commission earned on this payment goes back by the sale's cumulative refunded share (all of it once the payment is fully refunded).
@@ -370,6 +371,13 @@ async function chargeback(ctx, b, { freeze = true } = {}) {
     await ctx.db.run('UPDATE lot SET remaining = 0 WHERE id = ?', l.id);
     await post(ctx, { accountId: l.account_id, bucket: l.bucket, delta: -l.remaining, kind: 'reversal', ref: payRef, lotId: l.id, extRef: payRef, status: 'reversed' });
     removed += l.remaining;
+  }
+  // commission already spent or held cannot be taken now: the sale is remembered as owing it (blocks capture, approval and give-back)
+  {
+    const src = (await ctx.db.all('SELECT original FROM lot WHERE tenant_id = ? AND lower(origin) = ? AND source <> ?', ctx.tenantId, `sale:${payRef}`, 'reinstate')).reduce((n, c) => n + c.original, 0);
+    const done = (await ctx.db.first('SELECT clawed FROM sale_reversal WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef))?.clawed ?? 0;
+    const owe = src - done - removed;
+    if (src > 0) await ctx.db.run('INSERT INTO sale_reversal (tenant_id, ref, clawed, owed) VALUES (?,?,?,?) ON CONFLICT (tenant_id, ref) DO UPDATE SET clawed = excluded.clawed, owed = owed + excluded.owed', ctx.tenantId, payRef, src, Math.max(0, owe));
   }
   await flagConversions(ctx, payRef);
   // cash paid on an order with this payment: the bonus unlock it earned goes too

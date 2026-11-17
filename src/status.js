@@ -38,9 +38,9 @@ export function urlStatus(url, { ttlMs = 30000, now = Date.now, fetchFn = fetch 
     if (now() - at < ttlMs) return last;
     try {
       const r = await fetchFn(url, { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(3000) });
-      last = r.ok ? await r.json() : null;
+      if (r.ok) last = await r.json(); // an outage never replaces the last good answer (an "off" stays off)
     } catch {
-      last = null;
+      /* keep the last good answer */
     }
     at = now();
     return last;

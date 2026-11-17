@@ -12,7 +12,7 @@ import { emit } from './outbox.js';
 
 const MAX_ATTEMPTS = 8;
 
-const withTimeout = (p, ms) =>
+export const withTimeout = (p, ms) =>
   new Promise((res, rej) => {
     const t = setTimeout(() => rej(new Error('rail_timeout')), ms);
     Promise.resolve(p).then((v) => { clearTimeout(t); res(v); }, (e) => { clearTimeout(t); rej(e); });

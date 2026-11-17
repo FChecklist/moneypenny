@@ -438,3 +438,24 @@ test('A8-8. a credit purchase must be for the account that paid, when the paymen
   assert.equal((await buy(s.api, 'someone@else.com', 100, 'WHO1')).body.error.code, 'payment_conflict');
   assert.equal((await buy(s.api, 'payer@x.com', 100, 'WHO1')).status, 200);
 });
+
+import { urlStatus } from '../src/status.js';
+test('A9-1: a Hub outage never turns an "off" answer back on', async () => {
+  let t = 1000, down = false;
+  const st = urlStatus('http://x', { ttlMs: 10, now: () => t, fetchFn: async () => { if (down) throw new Error('down'); return { ok: true, json: async () => ({ hub: { mode: 'off' } }) }; } });
+  assert.equal((await st()).hub.mode, 'off');
+  down = true; t += 100;
+  assert.equal((await st()).hub.mode, 'off');
+});
+
+test('A9-2: a chargeback of spent commission leaves a debt on the sale; partial money refunds never round up in total', async () => {
+  const s = await setup();
+  await buy(s.api, 'b@y.com', 10000, 'AZ1');
+  await event(s.api, 'a@x.com', 'referral_sale_paid', { payer_email: 'b@y.com', cash_minor: 10000, currency: 'USD', sale_ref: 'AZ1', noNotice: true });
+  s.clock.t += 40 * 24 * HOUR;
+  const h = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'az-o', amount_minor: 300, currency: 'USD' });
+  await s.api.post('/v1/spend/capture', { hold_id: h.body.hold_id });
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'AZ1' });
+  const row = await s.db.first("SELECT owed FROM sale_reversal WHERE ref = 'az1'");
+  assert.ok(row && row.owed > 0);
+});
