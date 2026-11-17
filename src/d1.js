@@ -1,12 +1,9 @@
-// Cloudflare D1 adapter: SHAPE ONLY in Phase 0.
-// D1 has no interactive transactions, and the money logic needs "all or nothing" per request.
-// Until the Phase 1 design (one serialised writer per tenant, e.g. a Durable Object running
-// these same functions over its own SQLite) is built and audited, tx() refuses to run so
-// nothing can be deployed by accident.
+// D1 is NOT used for money. D1 has no interactive transactions (see do.js for the design that is used).
+// This stub exists only so nobody wires D1 up by accident.
 export function d1Adapter() {
   return {
     async tx() {
-      throw new Error('D1 atomic executor is not built yet (Phase 1). Use the local harness.');
+      throw new Error('Do not run the money code on plain D1: it has no interactive transactions. Use the Durable Object adapter (do.js).');
     },
   };
 }

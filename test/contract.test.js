@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { setup, buy } from './helpers.js';
+import { setup, buy, note } from './helpers.js';
 
 const ex = JSON.parse(readFileSync(new URL('../contract/v1/examples.json', import.meta.url), 'utf8'));
 const has = (actual, sample, path = '') => {
@@ -27,6 +27,7 @@ test('answers carry every field the contract shows', async () => {
   const o = await s.api.post('/v1/buy_credits', { email: 'person@example.com', credits: 2000, currency: 'USD', order_ref: 'buy-1' });
   has(o.body, ex.buy_credits.response);
   has((await s.pay.post('/v1/rail/confirm', { order_id: o.body.order_id, payment_ref: 'pay_C1', paid_minor: 2000, currency: 'USD' })).body, ex.rail_confirm.response);
+  await note(s.api, ex.event_commission.request.body.sale_ref, ex.event_commission.request.body.cash_minor);
   const sale = await s.api.post('/v1/event', ex.event_commission.request.body);
   has(sale.body, ex.event_commission.response);
   const h = await (await s.app.fetch(new Request('http://t.local/health'))).json();

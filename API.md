@@ -88,3 +88,22 @@ Events are written in the same step as the money change, then delivered signed:
 headers `x-mnp-event-id`, `x-mnp-timestamp`, `x-mnp-signature = HMAC(webhookSecret, timestamp + "." + body)`.
 Types: `fx.fetch_failed`, `fx.rate_rejected`, `rail.dead_letter`, `commission.reversed`, `credit.added`, `spend.captured`, `refund.money_due`, `refund.credits_returned`, `account.frozen`, `conversion.requested`, `conversion.paid`.
 Events carry the opaque account id, never an e-mail (references with `@` or spaces are refused). A failed send retries with back-off, up to 10 times.
+
+## Payment notice (purchase key)
+
+`POST /v1/payment_notice` `{ payment_ref, paid_minor, currency, payer_email? }`: the payment side says a real payment
+happened. Same id, same figures: no-op. Same id, other figures: `409 payment_conflict`. Captures of the cash part of an
+order and commission events must name a payment noted here (`402 payment_not_verified`, or the event outcome
+`payment_not_verified`, `cash_exceeds_payment`, `sale_reversed`).
+
+## Key classes and AI safeguards
+
+Keys: `read`, `spend` (stored as `api`), `purchase`, `admin`, `ai_read`. An `ai_read` key may only read and `POST /v1/ai/ask`,
+which creates a pending request for a person (admin key) to approve; it never spends, converts, pays out, refunds or changes
+a rate or price by itself. Switches: tenant `kill_switch` / `ai_enabled` settings, and the Hub `status.json`. The full
+machine-readable contract is `contract/v1/openapi.json`.
+
+## Currency display
+
+Default name `Moneypenny`, label `moneypenny`, symbol `coin` (a built-in icon). Text is never a bare symbol:
+`150 Moneypenny = US$1.50 (about Rs X)`. A `terms_url` setting links the terms.

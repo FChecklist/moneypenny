@@ -10,6 +10,7 @@ import { post } from './ledger.js';
 import { emit } from './outbox.js';
 import { audit } from './audit.js';
 import { createLot, claimPaymentRef } from './wallet.js';
+import { isReversed } from './spend.js';
 
 /** Pure calculation. gross is in the conversion currency; tds and gst come from settings; no rounding in the person's disfavour on net. */
 export function calculate(s, credits) {
@@ -57,6 +58,7 @@ export async function convertRequest(ctx, b) {
     const r = await ctx.db.run('UPDATE lot SET remaining = remaining - ? WHERE id = ? AND remaining >= ?', take, l.id, take);
     if (r.changes !== 1) throw new ApiError(409, 'balance_changed', 'Balance changed. Try again.');
     await post(ctx, { accountId: acc.id, bucket: 'commission', delta: -take, kind: 'conversion_request', ref: id, lotId: l.id, moneyMinor: calc.gross_minor, currency: calc.currency, tdsMinor: calc.tds_minor, gstMinor: calc.gst_minor, status: 'pending' });
+    await ctx.db.run('INSERT INTO conversion_part (request_id, lot_id, amount, origin) VALUES (?,?,?,?)', id, l.id, take, l.origin ?? null);
     todo -= take;
   }
   await emit(ctx, 'conversion.requested', { request_id: id, account_id: acc.id, credits, net_minor: calc.net_minor, currency: calc.currency });
@@ -80,6 +82,12 @@ export async function conversionAction(ctx, id, action, b = {}) {
   if (action !== 'reject') needOn(s);
   const stale = () => new ApiError(409, 'wrong_state', `This request is ${r.status}; it cannot ${action}.`);
 
+  if (action === 'approve' || action === 'instruct') {
+    // credits that came from a payment the bank took back must not become a payout
+    for (const p of await ctx.db.all('SELECT origin FROM conversion_part WHERE request_id = ?', id)) {
+      if (await isReversed(ctx, p.origin)) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was taken back. Reject this request.');
+    }
+  }
   if (action === 'approve') {
     if (r.status !== 'requested') throw stale();
     await setStatus(ctx, id, 'requested', 'approved', { approvedBy: ctx.actor });
@@ -108,9 +116,16 @@ export async function conversionAction(ctx, id, action, b = {}) {
     if (!['requested', 'approved'].includes(r.status)) throw stale();
     await setStatus(ctx, id, r.status, 'rejected');
     // credits come back as a fresh commission lot; its age is kept so the hold is not restarted
-    const lotId = await createLot(ctx, { accountId: r.account_id, bucket: 'commission', amount: r.credits, source: 'reinstate', sourceRef: `cnv:${id}`, createdAt: r.created_at - s.conversion_hold_days * DAY, kind: 'reversal', meta: { conversion_rejected: id }, extRef: null });
+    // each part goes back with the payment it came from; a part whose payment was taken back stays removed
+    let lotId = null;
+    let back = 0;
+    for (const p of await ctx.db.all('SELECT * FROM conversion_part WHERE request_id = ?', id)) {
+      if (await isReversed(ctx, p.origin)) continue;
+      lotId = await createLot(ctx, { accountId: r.account_id, bucket: 'commission', amount: p.amount, source: 'reinstate', sourceRef: `cnv:${id}:${p.lot_id}`, createdAt: r.created_at - s.conversion_hold_days * DAY, kind: 'reversal', meta: { conversion_rejected: id }, extRef: null, ...(p.origin ? { origin: p.origin } : {}) });
+      back += p.amount;
+    }
     await audit(ctx, 'conversion.reject', { id, lot_id: lotId });
-    return { id, status: 'rejected', returned_credits: r.credits };
+    return { id, status: 'rejected', returned_credits: back };
   }
   throw new ApiError(400, 'bad_request', 'action must be approve, instruct, mark_paid or reject.');
 }

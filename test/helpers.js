@@ -1,3 +1,5 @@
+import { doDb } from '../src/do.js';
+import { fakeStorage } from './do-storage.js';
 import { randomBytes } from 'node:crypto';
 import { openDb, migrate } from '../src/db.js';
 import { createApp } from '../src/api.js';
@@ -11,7 +13,7 @@ export const T0 = Date.UTC(2026, 10, 17, 9, 0, 0);
 
 /** Fresh in-memory app with a controllable clock and the 'demo' tenant. */
 export async function setup({ other = false } = {}) {
-  const db = openDb();
+  const db = process.env.MNP_DB === 'do' ? doDb(fakeStorage()) : openDb(); // MNP_DB=do runs the whole suite on the Durable Object adapter
   migrate(db);
   const clock = { t: T0 };
   const now = () => clock.t;
@@ -58,5 +60,13 @@ export const buy = (api, email, credits, ref, extra = {}) =>
   (api.pay || api).post('/v1/credit_purchase', { email, amount: credits, paid_minor: credits, currency: 'USD', payment_ref: ref, ...extra });
 
 let ek = 0;
-export const event = (api, email, type, extra = {}) =>
-  api.post('/v1/event', { email, event_type: type, event_key: `ev-${++ek}-${Math.random()}`, ...(extra.cash_minor !== undefined && extra.sale_ref === undefined ? { sale_ref: `sale-${ek}-${Math.random().toString(36).slice(2)}` } : {}), ...extra });
+/** A real payment is noted first (by the payment side), as in life. Pass noNotice: true to skip it. */
+export const note = (api, payment_ref, paid_minor, currency = 'USD') =>
+  (api.pay || api).post('/v1/payment_notice', { payment_ref, paid_minor, currency });
+
+export const event = async (api, email, type, extra = {}) => {
+  const { noNotice, ...rest } = extra;
+  if (rest.cash_minor !== undefined && rest.sale_ref === undefined) rest.sale_ref = `sale-${++ek}-${Math.random().toString(36).slice(2)}`;
+  if (rest.cash_minor !== undefined && !noNotice && typeof rest.sale_ref === 'string' && Number.isInteger(rest.cash_minor) && rest.cash_minor > 0) await note(api, rest.sale_ref, rest.cash_minor, rest.currency ?? 'USD');
+  return api.post('/v1/event', { email, event_type: type, event_key: `ev-${++ek}-${Math.random()}`, ...rest });
+};

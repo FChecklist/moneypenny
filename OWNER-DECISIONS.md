@@ -36,3 +36,5 @@ Other numbers I had to pick (please confirm or change):
 Open risks that need a person, not code: the CA questions in section 7 of the assessment, Razorpay's view on selling credits, the trademark check on the name, tax on bonus credits.
 - Bonus unlocks once a person has real paid value of $1 (100 credits) on record, net of refunds and chargebacks. (`bonus_unlock_min_credits`)
 - Conversion calculates in INR by default, needs a person's approval, and TDS is rounded up.
+
+- FX: no approval gate on rate jumps (owner ruling holds). Only a technical sanity check: INR must be 10 to 500 per US$ and within 50% of the last good rate, otherwise the feed is treated as bad, the last good rate is kept and an alert is raised. A person can fix a bad day with `node scripts/fx.js override INR 70.5 "reason"` (history is kept).

@@ -128,6 +128,10 @@
       "status": 422,
       "meaning": "Unlimited-repeat bonus rules need a lifetime cap."
     },
+    "cash_exceeds_payment": {
+      "status": 422,
+      "meaning": "The cash named is more than the noted payment, or in another currency."
+    },
     "commission_needs_cash": {
       "status": 422,
       "meaning": "Commission can only be a percent of cash received."
@@ -264,13 +268,21 @@
       "status": 503,
       "meaning": "The global off-switch has this service (or its reads or writes) switched off."
     },
+    "payment_conflict": {
+      "status": 409,
+      "meaning": "This payment id was already noted with different figures."
+    },
     "payment_mismatch": {
       "status": 422,
       "meaning": "The payment currency does not match the order."
     },
+    "payment_not_verified": {
+      "status": 402,
+      "meaning": "That payment has not been confirmed by the payment side yet."
+    },
     "payment_reversed": {
       "status": 409,
-      "meaning": "Some of these credits came from a payment that was reversed. Release this hold."
+      "meaning": "Some of these credits came from a payment that was taken back. Reject this request."
     },
     "price_changed": {
       "status": 409,
@@ -307,6 +319,10 @@
     "rule_exists": {
       "status": 409,
       "meaning": "A rule for this event already exists. Edit it instead."
+    },
+    "sale_reversed": {
+      "status": 422,
+      "meaning": "The sale was taken back."
     },
     "stale_timestamp": {
       "status": 401,
@@ -1452,6 +1468,67 @@
             "credits": 2000,
             "currency": "INR",
             "order_ref": "buy-2001"
+          }
+        }
+      }
+    },
+    "/v1/payment_notice": {
+      "post": {
+        "operationId": "paymentNotice",
+        "summary": "The payment side notes a real payment",
+        "description": "Tells us a real payment happened (id, amount, currency). A product can then capture the cash part of an order, or earn a commission, only against a payment noted here (or one that bought credits). The same id with the same figures is a no-op.",
+        "x-rw": "write",
+        "x-money": true,
+        "x-permission-level": "purchase",
+        "x-key-classes": [
+          "purchase"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_currency",
+          "bad_request",
+          "bad_signature",
+          "idempotency_conflict",
+          "idempotency_key_required",
+          "paused",
+          "paused_global",
+          "payment_conflict",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Any unique text up to 120 characters. The same key with the same request returns the first answer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
           }
         }
       }

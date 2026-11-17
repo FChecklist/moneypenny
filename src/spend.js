@@ -4,7 +4,7 @@ import { getSettings, creditsFromMinor, minorFromCredits } from './settings.js';
 import { findAccount, addPaid } from './accounts.js';
 import { post } from './ledger.js';
 import { emit } from './outbox.js';
-import { claimPaymentRef } from './wallet.js';
+import { claimPaymentRef, findPayment, lc } from './wallet.js';
 import { audit } from './audit.js';
 
 const PRIORITY = { bonus: 0, commission: 1, bought: 2 }; // spend order
@@ -30,8 +30,8 @@ function allocate(lots, limit, bonusCap, canUseBonus) {
 }
 const sum = (parts) => parts.reduce((a, p) => a + p.take, 0);
 
-const isReversed = async (ctx, origin) =>
-  origin != null && !!(await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, origin.replace(/^sale:/, '')));
+export const isReversed = async (ctx, origin) =>
+  origin != null && !!(await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, lc(origin.replace(/^sale:/i, ''))));
 
 /** Locked rates of an order, passed to every entry written for it. */
 const lockOf = (h) => (h.rate_inr ? { rateCpu: h.rate_cpu, rateInr: h.rate_inr } : {});
@@ -152,8 +152,11 @@ export async function capture(ctx, b) {
   for (const p of parts) if (await isReversed(ctx, p.origin)) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was reversed. Release this hold.');
   let payRef = null;
   if (h.cash_due_minor > 0) {
-    payRef = ref(b.payment_ref, 'payment_ref');
+    payRef = lc(ref(b.payment_ref, 'payment_ref'));
     if (int(b.cash_paid_minor, 'cash_paid_minor', { min: 1 }) < h.cash_due_minor) throw new ApiError(422, 'underpaid', 'The cash paid is less than the cash due.');
+    const known = await findPayment(ctx, payRef);
+    if (!known) throw new ApiError(402, 'payment_not_verified', 'That payment has not been confirmed by the payment side yet.');
+    if (known.currency !== h.currency || known.paid_minor < h.cash_due_minor) throw new ApiError(402, 'payment_not_verified', 'That payment does not cover this order.');
     await claimPaymentRef(ctx, payRef, 'order'); // one payment, one use, across purchases and orders
   }
   const r = await ctx.db.run("UPDATE hold SET status = 'captured', closed_at = ?, payment_ref = ? WHERE id = ? AND status = 'held'", ctx.now(), payRef, h.id);
@@ -278,15 +281,16 @@ async function refundPurchase(ctx, b) {
  * purchase lot, anything returned from orders later, and anything still held (not restored on release).
  */
 async function chargeback(ctx, b) {
-  const payRef = ref(b.payment_ref, 'payment_ref');
+  const payRef = lc(ref(b.payment_ref, 'payment_ref'));
   // The payment may have bought credits, or it may be the sale that earned a commission (or both ids may never have been seen).
-  const lot = await ctx.db.first("SELECT * FROM lot WHERE tenant_id = ? AND source = 'purchase' AND source_ref = ?", ctx.tenantId, payRef);
+  const lot = await ctx.db.first("SELECT * FROM lot WHERE tenant_id = ? AND source = 'purchase' AND lower(source_ref) = ?", ctx.tenantId, payRef);
   const sale = await ctx.db.first('SELECT 1 x FROM payment_ref WHERE tenant_id = ? AND ref = ?', ctx.tenantId, `sale:${payRef}`);
-  if (!lot && !sale) throw new ApiError(404, 'no_purchase', 'No such purchase or sale.');
+  const noted = await ctx.db.first('SELECT 1 x FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef);
+  if (!lot && !sale && !noted) throw new ApiError(404, 'no_purchase', 'No such purchase or sale.');
   const seen = await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, payRef);
   if (seen) return { removed_credits: 0, account_status: lot ? 'frozen' : 'unchanged', already: true };
   await ctx.db.run('INSERT INTO charged_back (tenant_id, payment_ref, created_at) VALUES (?,?,?)', ctx.tenantId, payRef, ctx.now());
-  const family = await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND (origin = ? OR origin = ?) AND remaining > 0", ctx.tenantId, payRef, `sale:${payRef}`);
+  const family = await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND (lower(origin) = ? OR lower(origin) = ?) AND remaining > 0", ctx.tenantId, payRef, `sale:${payRef}`);
   let removed = 0;
   for (const l of family) {
     await ctx.db.run('UPDATE lot SET remaining = 0 WHERE id = ?', l.id);

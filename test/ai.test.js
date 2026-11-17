@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { setup, bal, buy, MIN, HOUR } from './helpers.js';
+import { setup, bal, buy, MIN, HOUR, note } from './helpers.js';
 import { verifyAudit } from '../src/audit.js';
 import { verifyBalances } from '../src/ledger.js';
 import { keySecret } from '../src/auth.js';
@@ -117,6 +117,7 @@ test('spend, refund, conversion, payout and rate change are all ask-only', async
   await s.admin.post(`/v1/admin/approvals/${rc}/approve`, {});
   assert.equal((await s.admin.get('/v1/admin/settings')).body.settings.fx_margin_bps, 300);
   // conversion then payout steps
+  await note(s.api, 'S1', 20000);
   await s.api.post('/v1/event', { email: 'c@x.com', event_type: 'referral_sale_paid', event_key: 'e1', payer_email: 'b@y.com', cash_minor: 20000, currency: 'USD', sale_ref: 'S1' });
   s.clock.t += 8 * 24 * HOUR;
   const cv = (await ask(s, 'conversion', { email: 'c@x.com', credits: 2000 })).body.approval_id;

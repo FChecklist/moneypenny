@@ -55,3 +55,22 @@ Live hosting, a real rail and a real rate source (adapters are stubs; rail calls
 ## Public repo note
 
 No secrets in code. The signing master secret comes from the environment (`MNP_MASTER_SECRET`). All rules and numbers live in the database. Licence: all rights reserved (see LICENSE).
+
+## Where the money code runs (Cloudflare)
+
+Plain D1 has no interactive transactions, so the money code does **not** run on D1. It runs inside one SQLite-backed
+**Durable Object** (`src/do.js`, `src/worker.js`): one writer, its own database next to the code, and every request
+is all-or-nothing (Cloudflare documents that SQL run inside `ctx.storage.transaction()` is part of that transaction and
+rolls back if the closure throws). Requests are also queued one at a time by our own lock, because a rail call inside a
+transaction would otherwise let another request in. Run the whole suite on this adapter with `MNP_DB=do npm test`.
+
+**What is not tested:** the adapter is tested against a stand-in for Cloudflare's storage (`test/do-storage.js`), not the
+real runtime. Still to check once, on a real deploy: that a multi-statement migration runs through `sql.exec`, that
+foreign keys are enforced, and that a thrown error rolls back. One Durable Object is one writer for everyone, which is
+fine for Phase 0 volume; at higher volume split it per tenant.
+
+## Payments are noted before they are used
+
+The payment side calls `POST /v1/payment_notice` (purchase key) with the payment id, amount and currency. A product can
+then capture the cash part of an order, or earn a commission, only against a payment noted there (or one that bought
+credits). Payment ids are compared without regard to letter case.

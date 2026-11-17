@@ -1,7 +1,7 @@
 // The daily exchange-rate table, rate locking, margin, rounding, stale and failed fetches.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, bal, buy, DAY, MIN, T0 } from './helpers.js';
+import { setup, bal, buy, DAY, MIN, T0, note } from './helpers.js';
 import { refreshRates, currentRate, utcDayStart, stubSource } from '../src/fx.js';
 import { getSettings } from '../src/settings.js';
 
@@ -180,6 +180,7 @@ test('a hold keeps its rate; the cash it collects is booked at that rate', async
   await refreshRates(s.db, src({ INR: 72 }), DAY0 + DAY);
   s.clock.t = DAY0 + DAY + 2 * MIN; // after the new rate, still inside the hold
   assert.equal((await getSettings(s.ctx())).inr_paise_per_usd, 7200);
+  await note(s.api, 'rz9', r.body.cash_due_minor, 'INR');
   await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id, payment_ref: 'rz9', cash_paid_minor: r.body.cash_due_minor });
   const col = (await s.api.get('/v1/history?email=a@x.com')).body.entries.find((x) => x.kind === 'collection');
   assert.equal(col.rate_inr, 7000);

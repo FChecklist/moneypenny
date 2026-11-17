@@ -105,7 +105,35 @@ export async function expireLots(ctx) {
 }
 
 /** One real-payment id can be used once per tenant, whether it bought credits, paid an order or paid out. */
+/** A payment id is compared without regard to upper/lower case everywhere, so 'Pay_1' and 'pay_1' are one payment. */
+export const lc = (x) => String(x).toLowerCase();
+
+/** What we know about a real payment: a notice from the payment side, or a purchase we credited. null if unknown. */
+export async function findPayment(ctx, refId) {
+  const r = lc(refId).replace(/^sale:/, '');
+  const v = await ctx.db.first('SELECT paid_minor, currency FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
+  if (v) return { paid_minor: v.paid_minor, currency: v.currency };
+  const l = await ctx.db.first("SELECT paid_minor, currency FROM lot WHERE tenant_id = ? AND source = 'purchase' AND lower(source_ref) = ?", ctx.tenantId, r);
+  return l && l.paid_minor ? { paid_minor: l.paid_minor, currency: l.currency } : null;
+}
+
+/** The payment side tells us a real payment happened (purchase key). Same ref again with the same figures is a no-op. */
+export async function paymentNotice(ctx, b) {
+  const r = lc(ref(b.payment_ref, 'payment_ref'));
+  const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
+  const cur = b.currency;
+  if (cur !== 'INR' && cur !== 'USD') throw new ApiError(400, 'bad_currency', 'Payment is in INR or USD only.');
+  const prior = await ctx.db.first('SELECT paid_minor, currency FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
+  if (prior) {
+    if (prior.paid_minor !== paid || prior.currency !== cur) throw new ApiError(409, 'payment_conflict', 'This payment id was already noted with different figures.');
+    return { payment_ref: r, noted: true, duplicate: true };
+  }
+  await ctx.db.run('INSERT INTO verified_payment (tenant_id, ref, paid_minor, currency, payer_canon, created_at) VALUES (?,?,?,?,?,?)', ctx.tenantId, r, paid, cur, b.payer_email ? canonEmail(emailOrThrow(b.payer_email)) : null, ctx.now());
+  return { payment_ref: r, noted: true };
+}
+
 export async function claimPaymentRef(ctx, refId, kind) {
+  refId = lc(refId);
   try {
     await ctx.db.run('INSERT INTO payment_ref (tenant_id, ref, kind, created_at) VALUES (?,?,?,?)', ctx.tenantId, refId, kind, ctx.now());
   } catch (e) {
@@ -187,7 +215,12 @@ export async function processEvent(ctx, b) {
     if (!Number.isInteger(b.cash_minor) || b.cash_minor <= 0 || b.cash_minor > 100000000000) return reject(ctx, ev, 'no_cash_no_commission', rb);
     // The sale itself must be named (the real payment id), and each sale can pay commission once per tenant.
     if (typeof b.sale_ref !== 'string' || !/^[A-Za-z0-9._:/=+-]{1,100}$/.test(b.sale_ref)) return reject(ctx, ev, 'sale_ref_required', rb);
-    saleRef = b.sale_ref;
+    saleRef = lc(b.sale_ref);
+    // the sale must be a payment the payment side told us about, for at least this much, in this currency
+    const pay = await findPayment(ctx, saleRef);
+    if (!pay) return reject(ctx, ev, 'payment_not_verified', rb);
+    if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, saleRef)) return reject(ctx, ev, 'sale_reversed', rb);
+    if (pay.currency !== b.currency || b.cash_minor > pay.paid_minor) return reject(ctx, ev, 'cash_exceeds_payment', rb);
     if (await ctx.db.first('SELECT 1 x FROM payment_ref WHERE tenant_id = ? AND ref = ?', ctx.tenantId, `sale:${saleRef}`)) return reject(ctx, ev, 'sale_already_used', rb);
     const cash = creditsFromMinor(s, b.currency, b.cash_minor);
     amount = Math.floor((cash * rule.amount) / 10000);

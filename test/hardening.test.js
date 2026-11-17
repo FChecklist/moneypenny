@@ -1,7 +1,7 @@
 // One test (or more) for every finding of independent audit 1, plus the owner's later instructions.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, bal, buy, event, DAY } from './helpers.js';
+import { setup, bal, buy, event, DAY, note } from './helpers.js';
 import { verifyBalances, verifyChain } from '../src/ledger.js';
 import { reconcileAll } from '../src/reconcile.js';
 import { calculate } from '../src/convert.js';
@@ -140,6 +140,7 @@ test('cash paid on an order also counts toward the bonus unlock', async () => {
   await buy(s.api, 'a@x.com', 1, 'seed'); // a little bought credit so a hold exists; still below the unlock amount
   const r = await res(s.api, { amount_minor: 1000 });
   assert.equal(r.body.credit_applied, 1);
+  await note(s.api, 'rzp-cash', 999);
   await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id, payment_ref: 'rzp-cash', cash_paid_minor: 999 });
   const r2 = await res(s.api, { amount_minor: 1000 });
   assert.equal(r2.body.credit_applied, 100); // bonus now unlocked ($9.99 cash on record)
@@ -193,6 +194,7 @@ test('one payment id can be used once across purchases and order cash', async ()
   await buy(s.api, 'a@x.com', 500, 'PAY-1');
   await buy(s.api, 'b@x.com', 1000, 'pb');
   const r = await res(s.api, { email: 'b@x.com', amount_minor: 1500 });
+  await note(s.api, 'PAY-1', 500);
   const c = await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id, payment_ref: 'PAY-1', cash_paid_minor: 500 });
   assert.equal(c.body.error.code, 'payment_already_used');
   const dup = await buy(s.api, 'c@x.com', 100, 'PAY-1');
@@ -289,6 +291,7 @@ test('the ledger carries kind, money, tax, status and the external payment id', 
   await buy(s.api, 'a@x.com', 200, 'pay1');
   await event(s.api, 'r@x.com', 'referral_sale_paid', { payer_email: 'b@y.com', cash_minor: 5000, currency: 'USD' });
   const h = await res(s.api, { amount_minor: 1000 });
+  await note(s.api, 'rzp9', 900);
   await s.api.post('/v1/spend/capture', { hold_id: h.body.hold_id, payment_ref: 'rzp9', cash_paid_minor: 900 });
   await s.api.post('/v1/refund', { type: 'order', hold_id: h.body.hold_id, credits: 50 });
   s.clock.t += 400 * DAY;

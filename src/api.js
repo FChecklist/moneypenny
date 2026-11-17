@@ -2,7 +2,7 @@
 import { ApiError, sha256Hex } from './util.js';
 import { authenticate } from './auth.js';
 import { getSettings } from './settings.js';
-import { getBalance, creditPurchase, creditManualBonus, processEvent, history } from './wallet.js';
+import { getBalance, creditPurchase, paymentNotice, creditManualBonus, processEvent, history } from './wallet.js';
 import { reserve, reserveItem, capture, release, refund, sweepHolds } from './spend.js';
 import { buyCredits, railConfirm, quote, setCatalogue, listCatalogue, listDeadLetters, requeueDeadLetter, processRail, railHealth, fxHealth } from './gate.js';
 import { convertRequest, conversionAction, listConversions } from './convert.js';
@@ -33,6 +33,7 @@ export const ROUTES = [
   ['POST', '/v1/rail/confirm', ['purchase'], true, (c, b) => railConfirm(c, b)],
   ['POST', '/v1/spend/reserve_item', ['api'], true, async (c, b) => { await sweepHolds(c); return reserveItem(c, b); }],
   ['POST', '/v1/credit_purchase', ['purchase'], true, (c, b) => creditPurchase(c, b)],
+  ['POST', '/v1/payment_notice', ['purchase'], true, (c, b) => paymentNotice(c, b)],
   ['POST', '/v1/credit', ['api'], true, (c, b) => creditBonus(c, b)],
   ['POST', '/v1/event', ['api'], true, (c, b) => processEvent(c, b)],
   ['POST', '/v1/spend/reserve', ['api'], true, async (c, b) => { await sweepHolds(c); return reserve(c, b); }],
@@ -151,7 +152,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       }
       let idem = request.headers.get('idempotency-key');
       // credit bought: the real payment id IS the idempotency key unless the caller sends its own
-      const payRoute = route[1] === '/v1/credit_purchase' || route[1] === '/v1/rail/confirm';
+      const payRoute = route[1] === '/v1/credit_purchase' || route[1] === '/v1/rail/confirm' || route[1] === '/v1/payment_notice';
       if (!idem && payRoute && typeof body.payment_ref === 'string') idem = `pay:${body.payment_ref}`;
       // "pay:" keys belong to real payments only: no other route may use that namespace, and a payment route may only use its own id
       if (idem && idem.startsWith('pay:') && !(payRoute && idem === `pay:${body.payment_ref}`)) throw new ApiError(400, 'bad_idempotency_key', 'Keys starting with "pay:" are reserved for payment ids.');
