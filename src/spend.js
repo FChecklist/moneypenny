@@ -157,6 +157,8 @@ export async function capture(ctx, b) {
     if (int(b.cash_paid_minor, 'cash_paid_minor', { min: 1 }) < h.cash_due_minor) throw new ApiError(422, 'underpaid', 'The cash paid is less than the cash due.');
     const known = await findPayment(ctx, payRef);
     if (!known) throw new ApiError(402, 'payment_not_verified', 'That payment has not been confirmed by the payment side yet.');
+    const who = await ctx.db.first('SELECT email_canon FROM account WHERE id = ?', h.account_id);
+    if (known.payer && known.payer !== who.email_canon) throw new ApiError(402, 'payment_not_verified', 'That payment belongs to someone else.');
     if (known.currency !== h.currency || known.paid_minor < h.cash_due_minor) throw new ApiError(402, 'payment_not_verified', 'That payment does not cover this order.');
     await claimPaymentRef(ctx, payRef, 'order'); // one payment, one use, across purchases and orders
   }
@@ -179,9 +181,20 @@ async function giveBack(ctx, h, kind) {
       await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: 0, kind: 'reversal', ref: h.id, lotId: p.lot_id, meta: { not_restored: p.amount } });
       continue;
     }
-    const r = await ctx.db.run('UPDATE lot SET remaining = remaining + ? WHERE id = ? AND remaining + ? <= original', p.amount, p.lot_id, p.amount);
+    let back = p.amount;
+    if (p.bucket === 'commission') {
+      const lot = await ctx.db.first('SELECT refunded_credits FROM lot WHERE id = ?', p.lot_id);
+      const withheld = Math.min(back, lot?.refunded_credits ?? 0);
+      if (withheld > 0) {
+        await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits - ? WHERE id = ?', withheld, p.lot_id);
+        await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: 0, kind: 'reversal', ref: h.id, lotId: p.lot_id, meta: { not_restored: withheld, refunded_sale: true } });
+        back -= withheld;
+      }
+    }
+    if (back < 1) continue;
+    const r = await ctx.db.run('UPDATE lot SET remaining = remaining + ? WHERE id = ? AND remaining + ? <= original', back, p.lot_id, back);
     if (r.changes !== 1) throw new ApiError(500, 'ledger_mismatch', 'Could not give credits back.');
-    await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: p.amount, kind, ref: h.id, lotId: p.lot_id });
+    await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: back, kind, ref: h.id, lotId: p.lot_id });
   }
 }
 
@@ -257,6 +270,15 @@ async function refundOrder(ctx, b) {
   return { returned_credits: returned, money_due_minor: 0 };
 }
 
+/** Credits that came from this payment may sit in a conversion: stop what can be stopped, flag the rest for a person. */
+async function flagConversions(ctx, payRef) {
+  for (const l of await ctx.db.all("SELECT DISTINCT cr.id, cr.status FROM conversion_part cp JOIN conversion_request cr ON cr.id = cp.request_id WHERE cr.tenant_id = ? AND (lower(cp.origin) = ? OR lower(cp.origin) = ?)", ctx.tenantId, payRef, `sale:${payRef}`)) {
+    if (l.status === 'rejected') continue;
+    await audit(ctx, 'conversion.payment_reversed', { request_id: l.id, status: l.status, payment_ref: payRef });
+    await emit(ctx, 'conversion.needs_review', { request_id: l.id, status: l.status, payment_ref: payRef });
+  }
+}
+
 /** Real money back, only for unspent bought credits. We never move money: the event tells IT Services. */
 async function refundPurchase(ctx, b) {
   const s = await getSettings(ctx);
@@ -273,11 +295,15 @@ async function refundPurchase(ctx, b) {
   if (r.changes !== 1) throw new ApiError(409, 'balance_changed', 'Balance changed. Try again.');
   // commission earned on this payment goes back in the same proportion, so a refund cannot leave a referrer paid
   for (const c of await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND lower(origin) = ? AND remaining > 0", ctx.tenantId, `sale:${payRef}`)) {
-    const take = Math.min(c.remaining, Math.ceil((c.original * want) / lot.original));
+    const owed = Math.ceil((c.original * want) / lot.original);
+    const take = Math.min(c.remaining, owed);
+    // what could not be taken now (held in an order, or already spent) is remembered and withheld when the hold gives it back
+    if (owed > take) await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits + ? WHERE id = ?', owed - take, c.id);
     if (take < 1) continue;
     await ctx.db.run('UPDATE lot SET remaining = remaining - ? WHERE id = ?', take, c.id);
     await post(ctx, { accountId: c.account_id, bucket: c.bucket, delta: -take, kind: 'reversal', ref: payRef, lotId: c.id, extRef: payRef, status: 'reversed', meta: { refund_of_sale: true } });
   }
+  await flagConversions(ctx, payRef);
   await addPaid(ctx, lot.account_id, -want);
   await post(ctx, { accountId: lot.account_id, bucket: 'bought', delta: -want, kind: 'refund', ref: payRef, lotId: lot.id, moneyMinor: money, currency: lot.currency, extRef: payRef, meta: { money_back: true } });
   await emit(ctx, 'refund.money_due', { account_id: lot.account_id, payment_ref: payRef, amount_minor: money, currency: lot.currency, credits: want });
@@ -305,12 +331,7 @@ async function chargeback(ctx, b) {
     await post(ctx, { accountId: l.account_id, bucket: l.bucket, delta: -l.remaining, kind: 'reversal', ref: payRef, lotId: l.id, extRef: payRef, status: 'reversed' });
     removed += l.remaining;
   }
-  // credits taken from these lots may already sit in a conversion: stop what can be stopped, flag the rest for a person
-  for (const l of await ctx.db.all("SELECT DISTINCT cr.id, cr.status FROM conversion_part cp JOIN conversion_request cr ON cr.id = cp.request_id WHERE cr.tenant_id = ? AND (lower(cp.origin) = ? OR lower(cp.origin) = ?)", ctx.tenantId, payRef, `sale:${payRef}`)) {
-    if (l.status === 'rejected') continue;
-    await audit(ctx, 'conversion.payment_reversed', { request_id: l.id, status: l.status, payment_ref: payRef });
-    await emit(ctx, 'conversion.needs_review', { request_id: l.id, status: l.status, payment_ref: payRef });
-  }
+  await flagConversions(ctx, payRef);
   // cash paid on an order with this payment: the bonus unlock it earned goes too
   for (const h of await ctx.db.all("SELECT * FROM hold WHERE tenant_id = ? AND status = 'captured' AND lower(payment_ref) = ?", ctx.tenantId, payRef)) {
     const s = await getSettings(ctx);

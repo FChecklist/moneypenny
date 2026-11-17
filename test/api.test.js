@@ -103,9 +103,9 @@ test('bad JSON, unknown route, giant body', async () => {
   const mkRaw = async (method, path, text) => {
     const { keySecret, signString } = await import('../src/auth.js');
     const { sha256Hex } = await import('../src/util.js');
-    const ts = String(s.clock.t), nonce = `x${Math.random()}`;
-    const sig = await hmacHex(await keySecret(s.master, s.demo.api.key_id), signString(ts, nonce, method, path, await sha256Hex(text)));
-    return s.app.fetch(new Request(`http://t.local${path}`, { method, body: text, headers: { 'x-mnp-key': s.demo.api.key_id, 'x-mnp-timestamp': ts, 'x-mnp-nonce': nonce, 'x-mnp-signature': sig, 'idempotency-key': `k${Math.random()}` } }));
+    const ts = String(s.clock.t), nonce = `x${Math.random()}`, idemK = `k${Math.random()}`;
+    const sig = await hmacHex(await keySecret(s.master, s.demo.api.key_id), signString(ts, nonce, method, path, await sha256Hex(text), idemK));
+    return s.app.fetch(new Request(`http://t.local${path}`, { method, body: text, headers: { 'x-mnp-key': s.demo.api.key_id, 'x-mnp-timestamp': ts, 'x-mnp-nonce': nonce, 'x-mnp-signature': sig, 'idempotency-key': idemK } }));
   };
   assert.equal((await mkRaw('POST', '/v1/event', '{nope')).status, 400);
   assert.equal((await mkRaw('POST', '/v1/nothing', '{}')).status, 404);

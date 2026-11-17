@@ -5,7 +5,7 @@ import { ApiError, hmacHex, sha256Hex, safeEqual, newId, MIN } from './util.js';
 import { audit } from './audit.js';
 
 export const keySecret = (master, keyId) => hmacHex(master, `mnp-key:${keyId}`);
-export const signString = (ts, nonce, method, pathQuery, bodyHash) => [ts, nonce, method.toUpperCase(), pathQuery, bodyHash].join('\n');
+export const signString = (ts, nonce, method, pathQuery, bodyHash, idem = '') => [ts, nonce, method.toUpperCase(), pathQuery, bodyHash, idem].join('\n');
 
 export async function createApiKey(ctx, { scope, label = null }) {
   const keyId = newId('mk').slice(0, 21);
@@ -25,7 +25,7 @@ export async function authenticate(ctx, headers, method, pathQuery, rawBody, rat
   if (!keyId || !ts || !nonce || !sig || nonce.length > 100) throw new ApiError(401, 'unsigned', 'Signed headers are missing.');
   const row = await ctx.db.first('SELECT k.*, t.status tstatus FROM api_key k JOIN tenant t ON t.id = k.tenant_id WHERE k.key_id = ?', keyId);
   const secret = await keySecret(ctx.master, keyId);
-  const expect = await hmacHex(secret, signString(ts, nonce, method, pathQuery, await sha256Hex(rawBody)));
+  const expect = await hmacHex(secret, signString(ts, nonce, method, pathQuery, await sha256Hex(rawBody), headers.get('idempotency-key') ?? ''));
   // Same answer for unknown key and bad signature.
   if (!row || row.status !== 'active' || row.tstatus !== 'active' || !safeEqual(expect, sig)) throw new ApiError(401, 'bad_signature', 'Signature not accepted.');
   const t = Number(ts);

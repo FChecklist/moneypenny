@@ -8,7 +8,7 @@ Errors look like `{"ok":false,"error":{"code":"...","message":"..."}}`.
 Headers: `x-mnp-key`, `x-mnp-timestamp` (milliseconds), `x-mnp-nonce` (new every call), `x-mnp-signature`.
 
 ```
-signature = hex( HMAC-SHA256( secret, [timestamp, nonce, METHOD, pathWithQuery, sha256hex(body)].join("\n") ) )
+signature = hex( HMAC-SHA256( secret, [timestamp, nonce, METHOD, pathWithQuery, sha256hex(body), idempotencyKeyOrEmpty].join("\n") ) )
 ```
 
 - The timestamp must be within 5 minutes. A nonce works once per key (a replay gets 401).

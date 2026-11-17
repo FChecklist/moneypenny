@@ -73,7 +73,7 @@ export function buildContract() {
     servers: [{ url: 'https://example.invalid', description: 'Placeholder; the real address is set at deploy time.' }],
     'x-signing': {
       headers: ['x-mnp-key', 'x-mnp-timestamp', 'x-mnp-nonce', 'x-mnp-signature'],
-      signature: 'hex(HMAC-SHA256(secret, [timestamp, nonce, METHOD, pathWithQuery, sha256hex(body)].join("\\n")))',
+      signature: 'hex(HMAC-SHA256(secret, [timestamp, nonce, METHOD, pathWithQuery, sha256hex(body), idempotencyKeyOrEmpty].join("\\n")))',
       timestamp: 'milliseconds; accepted within 5 minutes; a nonce works once per key',
       idempotency: 'Every POST, PUT and DELETE needs an Idempotency-Key header. Keys starting "pay:" are reserved for payment routes and must equal pay:<payment_ref>.',
     },

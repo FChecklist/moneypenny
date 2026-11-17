@@ -70,7 +70,7 @@ export const ASKABLE_ACTIONS = Object.keys(ASKABLE);
 /** AI key: "please do this". Creates a pending approval. Does NOT do it. */
 export async function ask(ctx, b) {
   const s = await getSettings(ctx);
-  const spec = ASKABLE[b.action];
+  const spec = (Object.hasOwn(ASKABLE, b.action) ? ASKABLE[b.action] : null);
   if (!spec) throw new ApiError(400, 'action_not_askable', `action must be one of: ${ASKABLE_ACTIONS.join(', ')}.`);
   if (!b.params || typeof b.params !== 'object' || Array.isArray(b.params)) throw bad('params must be an object.');
   const params = spec.clean(b.params);

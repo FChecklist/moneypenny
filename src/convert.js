@@ -9,7 +9,7 @@ import { findAccount } from './accounts.js';
 import { post } from './ledger.js';
 import { emit } from './outbox.js';
 import { audit } from './audit.js';
-import { createLot, claimPaymentRef } from './wallet.js';
+import { createLot, claimPaymentRef, findPayment, payId } from './wallet.js';
 import { isReversed } from './spend.js';
 
 /** Pure calculation. gross is in the conversion currency; tds and gst come from settings; no rounding in the person's disfavour on net. */
@@ -85,7 +85,7 @@ export async function conversionAction(ctx, id, action, b = {}) {
   if (action === 'approve' || action === 'instruct') {
     // credits that came from a payment the bank took back must not become a payout
     for (const p of await ctx.db.all('SELECT origin FROM conversion_part WHERE request_id = ?', id)) {
-      if (await isReversed(ctx, p.origin)) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was taken back. Reject this request.');
+      if ((await isReversed(ctx, p.origin)) || (p.origin && !(await findPayment(ctx, p.origin.replace(/^sale:/i, ''))))) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was taken back. Reject this request.');
     }
   }
   if (action === 'approve') {
@@ -103,6 +103,7 @@ export async function conversionAction(ctx, id, action, b = {}) {
   }
   if (action === 'mark_paid') {
     if (r.status !== 'instructed') throw stale();
+    payId(b.payment_ref); // may not start with the internal prefix
     const extRef = ref(b.payment_ref, 'payment_ref'); // the real payment id (for example a bank UTR), typed by a person
     await claimPaymentRef(ctx, extRef, 'payout');
     await setStatus(ctx, id, 'instructed', 'paid', { extRef });

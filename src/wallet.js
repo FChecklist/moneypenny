@@ -118,9 +118,10 @@ export const payId = (x, name = 'payment_ref') => {
 export async function findPayment(ctx, refId) {
   const r = lc(refId);
   const v = await ctx.db.first('SELECT paid_minor, currency, payer_canon FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
-  if (v) return { paid_minor: v.paid_minor, currency: v.currency, payer: v.payer_canon };
   const l = await ctx.db.first("SELECT l.paid_minor - l.refunded_minor AS left_minor, l.currency, a.email_canon AS payer FROM lot l JOIN account a ON a.id = l.account_id WHERE l.tenant_id = ? AND l.source = 'purchase' AND lower(l.source_ref) = ?", ctx.tenantId, r);
-  return l && l.left_minor > 0 ? { paid_minor: l.left_minor, currency: l.currency, payer: l.payer } : null;
+  if (l && l.left_minor <= 0) return null; // fully refunded: it is no longer a payment anyone can earn on
+  if (v) return { paid_minor: l ? Math.min(v.paid_minor, l.left_minor) : v.paid_minor, currency: v.currency, payer: v.payer_canon };
+  return l ? { paid_minor: l.left_minor, currency: l.currency, payer: l.payer } : null;
 }
 
 /** The payment side tells us a real payment happened (purchase key). Same ref again with the same figures is a no-op. */

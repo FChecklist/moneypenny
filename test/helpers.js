@@ -41,11 +41,12 @@ export function makeClient(app, clock, keys) {
     const text = body === undefined ? '' : JSON.stringify(body);
     const t = String(ts ?? clock.t);
     const nn = nonce ?? `n${++n}-${Math.random()}`;
-    const sig = await hmacHex(await keySecret(app.master, keys.key_id), signString(t, nn, method, path, await sha256Hex(text)));
+    const idemVal = method === 'GET' || idem === null ? undefined : idem ?? `k${++n}-${Math.random()}`;
+    const sig = await hmacHex(await keySecret(app.master, keys.key_id), signString(t, nn, method, path, await sha256Hex(text), (headers['idempotency-key'] ?? idemVal) ?? ''));
     const h = { 'x-mnp-key': keys.key_id, 'x-mnp-timestamp': t, 'x-mnp-nonce': nn, 'x-mnp-signature': sign ? sig : 'bad', ...headers };
     if (method !== 'GET') {
       h['content-type'] = 'application/json';
-      if (idem !== null) h['idempotency-key'] = idem ?? `k${++n}-${Math.random()}`;
+      if (idemVal !== undefined) h['idempotency-key'] = idemVal;
     }
     const res = await app.fetch(new Request(`http://t.local${path}`, { method, headers: h, body: method === 'GET' ? undefined : text }));
     return { status: res.status, body: await res.json(), headers: res.headers };

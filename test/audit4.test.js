@@ -128,3 +128,80 @@ test('20. a sale that was not yet noted can be sent again once the payment is no
   await note(s.api, 'LATE1', 2000, 'USD', 'b@y.com');
   assert.equal((await sale(s.api, ev)).body.granted, 200);
 });
+
+// ---------- audit 5 ----------
+test('A5-1. a fully refunded purchase cannot earn commission, even when the payment was also noted', async () => {
+  const s = await setup();
+  await note(s.api, 'RP1', 2000, 'USD', 'b@y.com');
+  await buy(s.api, 'b@y.com', 2000, 'RP1');
+  assert.equal((await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'RP1' })).status, 200);
+  assert.equal((await sale(s.api, { sale_ref: 'RP1', noNotice: true })).body.granted, 0);
+});
+
+test('A5-2. a purchase refund flags a conversion already in flight', async () => {
+  const s = await setup();
+  await s.admin.put('/v1/admin/settings', { conversion_enabled: true, tds_rate_bps: 1000 });
+  await buy(s.api, 'b@y.com', 20000, 'RP3');
+  await sale(s.api, { sale_ref: 'RP3', cash_minor: 20000, noNotice: true });
+  s.clock.t += 40 * 24 * HOUR;
+  assert.equal((await s.api.post('/v1/convert_request', { email: 'a@x.com', credits: 2000 })).status, 200);
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'RP3' });
+  assert.equal((await s.db.first("SELECT COUNT(*) n FROM audit_log WHERE action = 'conversion.payment_reversed'")).n, 1);
+});
+
+test('A5-3. commission held in an open order is not given back after its sale is refunded', async () => {
+  const s = await setup();
+  await buy(s.api, 'b@y.com', 20000, 'RP2');
+  await sale(s.api, { sale_ref: 'RP2', cash_minor: 20000, noNotice: true }); // 2000 commission
+  s.clock.t += 8 * 24 * HOUR;
+  const h = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'oh', amount_minor: 1500, currency: 'USD' });
+  assert.ok(h.body.credit_applied > 0);
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'RP2' });
+  await s.api.post('/v1/spend/release', { hold_id: h.body.hold_id });
+  assert.equal((await s.db.first("SELECT COALESCE(SUM(remaining),0) n FROM lot WHERE bucket = 'commission'")).n, 0);
+});
+
+test('A5-4. wording rules cover every text setting and survive tricks', async () => {
+  const s = await setup();
+  const put = (o) => s.admin.put('/v1/admin/settings', o);
+  assert.equal((await put({ product_name: 'Fake coins' })).status, 400);
+  assert.equal((await put({ wording_convert_line: 'play money {amount}' })).status, 400);
+  assert.equal((await put({ currency_name: 'F​ake' })).status, 400);
+  assert.equal((await put({ unit_symbol: '＄' })).status, 400); // full-width dollar sign
+  assert.equal((await put({ unit_symbol: '\u{1F4B2}' })).status, 400);
+  assert.equal((await put({ unit_symbol: 'coin' })).status, 200);
+});
+
+test('A5-5. odd keys give a clean 400, not a crash', async () => {
+  const s = await setup();
+  assert.equal((await s.ai.post('/v1/ai/ask', { action: 'constructor', params: {} })).status, 400);
+  assert.equal((await s.ai.post('/v1/ai/ask', { action: '__proto__', params: {} })).status, 400);
+  assert.equal((await s.admin.put('/v1/admin/settings', { toString: 5 })).status, 400);
+});
+
+test('A5-7. the Idempotency-Key header is signed: swapping it breaks the signature', async () => {
+  const s = await setup();
+  const r = await s.api.post('/v1/credit', { email: 'a@x.com', bucket: 'bonus', amount: 5, ref: 'sw1' }, { idem: 'orig', headers: {} });
+  assert.equal(r.status, 200);
+  const { signString, keySecret } = await import('../src/auth.js');
+  const { hmacHex, sha256Hex } = await import('../src/util.js');
+  const text = JSON.stringify({ email: 'a@x.com', bucket: 'bonus', amount: 5, ref: 'sw2' });
+  const sig = await hmacHex(await keySecret(s.master, s.demo.api.key_id), signString(String(s.clock.t), 'nsw', 'POST', '/v1/credit', await sha256Hex(text), 'orig'));
+  const res = await s.app.fetch(new Request('http://t.local/v1/credit', { method: 'POST', body: text, headers: { 'x-mnp-key': s.demo.api.key_id, 'x-mnp-timestamp': String(s.clock.t), 'x-mnp-nonce': 'nsw', 'x-mnp-signature': sig, 'idempotency-key': 'swapped' } }));
+  assert.equal(res.status, 401);
+});
+
+test('A5-8. processing the rail queue by hand is audited', async () => {
+  const s = await setup();
+  await s.admin.post('/v1/admin/rail/process', {});
+  assert.equal((await s.db.first("SELECT COUNT(*) n FROM audit_log WHERE action = 'rail.process'")).n, 1);
+});
+
+test('A5-9. a noted payment cannot be used to pay for another person order', async () => {
+  const s = await setup();
+  await buy(s.api, 'a@x.com', 1000, 'p1');
+  const r = await s.api.post('/v1/spend/reserve', { email: 'a@x.com', order_ref: 'o9', amount_minor: 3400, currency: 'USD' });
+  await note(s.api, 'BUYER1', r.body.cash_due_minor, 'USD', 'someone@else.com');
+  const c = await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id, payment_ref: 'BUYER1', cash_paid_minor: r.body.cash_due_minor });
+  assert.equal(c.body.error.code, 'payment_not_verified');
+});

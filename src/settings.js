@@ -89,8 +89,12 @@ export async function getSettings(ctx) {
   return out;
 }
 
+/** Normalised for checking: compatibility forms folded, invisible characters removed, lower case. */
+const squash = (t) => String(t).normalize('NFKC').replace(/[\p{Cf}\p{Cc}\s_.-]+/gu, '').toLowerCase();
+const BAD_WORDS = new RegExp(['fa' + 'ke', 'playmoney', 'pretend', 'toymoney', 'mono' + 'polymoney'].join('|'));
+
 export function validate(key, value) {
-  const s = SCHEMA[key];
+  const s = Object.hasOwn(SCHEMA, key) ? SCHEMA[key] : null;
   if (!s) throw new ApiError(400, 'unknown_setting', `Unknown setting: ${key}`);
   const bad = (m) => new ApiError(400, 'bad_setting', `${key}: ${m}`);
   switch (s.type) {
@@ -108,7 +112,8 @@ export function validate(key, value) {
     case 'str':
       if (typeof value !== 'string' || !value.length || value.length > 120) throw bad('text up to 120 characters');
       if (/[<>]/.test(value)) throw bad('no angle brackets');
-      if (['currency_name', 'unit_label', 'unit_symbol'].includes(key) && (new RegExp(['fa' + 'ke', 'play[ -]?money', 'pretend', 'toy money'].join('|'), 'i').test(value) || (key === 'unit_symbol' && /^[\s$]*$/.test(value)))) throw bad('this wording is not allowed (no words that belittle the currency, and the symbol is never a bare dollar sign)');
+      if (BAD_WORDS.test(squash(value))) throw bad('this wording is not allowed');
+      if (key === 'unit_symbol' && (/\p{Sc}/u.test(value.normalize('NFKC')) || /^[\s\p{Sc}\p{Cf}]*$/u.test(value) || !/^[\p{L}\p{N}]{1,6}$/u.test(value))) throw bad('the symbol is 1 to 6 letters or digits (or "coin"), never a currency sign');
       return value;
     case 'url':
       if (value === null) return null;
