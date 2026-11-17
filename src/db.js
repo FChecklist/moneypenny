@@ -73,7 +73,20 @@ export function migrate(db, files = readMigrationFiles()) {
   }
   for (const [f, sql] of files) {
     if (done.has(f)) continue;
-    db.exec(sql);
-    db.raw.prepare('INSERT INTO schema_migrations (file, applied_at) VALUES (?, ?)').run(f, Date.now());
+    if (db.raw.exec) {
+      // one transaction per file: it is applied completely or not at all
+      db.raw.exec('BEGIN');
+      try {
+        db.raw.exec(sql);
+        db.raw.prepare('INSERT INTO schema_migrations (file, applied_at) VALUES (?, ?)').run(f, Date.now());
+        db.raw.exec('COMMIT');
+      } catch (e) {
+        db.raw.exec('ROLLBACK');
+        throw e;
+      }
+    } else {
+      db.exec(sql); // Durable Object: the caller wraps migrate() in storage.transactionSync
+      db.raw.prepare('INSERT INTO schema_migrations (file, applied_at) VALUES (?, ?)').run(f, Date.now());
+    }
   }
 }

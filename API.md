@@ -91,7 +91,7 @@ Events carry the opaque account id, never an e-mail (references with `@` or spac
 
 ## Payment notice (purchase key)
 
-`POST /v1/payment_notice` `{ payment_ref, paid_minor, currency, payer_email? }`: the payment side says a real payment
+`POST /v1/payment_notice` `{ payment_ref, paid_minor, currency, payer_email }` (payer_email is required: the payer must be the account on a capture, and the buyer named on a commission event): the payment side says a real payment
 happened. Same id, same figures: no-op. Same id, other figures: `409 payment_conflict`. Captures of the cash part of an
 order and commission events must name a payment noted here (`402 payment_not_verified`, or the event outcome
 `payment_not_verified`, `cash_exceeds_payment`, `sale_reversed`).

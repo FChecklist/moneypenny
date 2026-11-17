@@ -30,6 +30,17 @@ function allocate(lots, limit, bonusCap, canUseBonus) {
 }
 const sum = (parts) => parts.reduce((a, p) => a + p.take, 0);
 
+/** Credits a refund still claims from this lot (the sale was refunded while they were held or spent). They are never given back. */
+export async function withholdDebt(ctx, lotId, amount, ref, accountId, bucket) {
+  if (bucket !== 'commission') return amount;
+  const lot = await ctx.db.first('SELECT refunded_credits FROM lot WHERE id = ?', lotId);
+  const withheld = Math.min(amount, lot?.refunded_credits ?? 0);
+  if (withheld > 0) {
+    await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits - ? WHERE id = ?', withheld, lotId);
+    await post(ctx, { accountId, bucket, delta: 0, kind: 'reversal', ref, lotId, meta: { not_restored: withheld, refunded_sale: true } });
+  }
+  return amount - withheld;
+}
 export const isReversed = async (ctx, origin) =>
   origin != null && !!(await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, lc(origin.replace(/^sale:/i, ''))));
 
@@ -149,7 +160,10 @@ export async function capture(ctx, b) {
   if (h.status === 'released') throw new ApiError(409, 'hold_closed', 'This hold was released. Reserve again.');
   if (ctx.now() > h.expires_at + s.capture_grace_minutes * MIN) throw new ApiError(410, 'hold_expired', 'This hold has run out. Reserve again.');
   const parts = await partsOf(ctx, h.id);
-  for (const p of parts) if (await isReversed(ctx, p.origin)) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was reversed. Release this hold.');
+  for (const p of parts) {
+    if (await isReversed(ctx, p.origin)) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was reversed. Release this hold.');
+    if (p.bucket === 'commission' && ((await ctx.db.first('SELECT refunded_credits r FROM lot WHERE id = ?', p.lot_id))?.r ?? 0) > 0) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a sale that was refunded. Release this hold.');
+  }
   let payRef = null;
   if (h.cash_due_minor > 0) {
     payRef = payId(b.payment_ref);
@@ -158,7 +172,7 @@ export async function capture(ctx, b) {
     const known = await findPayment(ctx, payRef);
     if (!known) throw new ApiError(402, 'payment_not_verified', 'That payment has not been confirmed by the payment side yet.');
     const who = await ctx.db.first('SELECT email_canon FROM account WHERE id = ?', h.account_id);
-    if (known.payer && known.payer !== who.email_canon) throw new ApiError(402, 'payment_not_verified', 'That payment belongs to someone else.');
+    if (!known.payer || known.payer !== who.email_canon) throw new ApiError(402, 'payment_not_verified', 'That payment belongs to someone else.');
     if (known.currency !== h.currency || known.paid_minor < h.cash_due_minor) throw new ApiError(402, 'payment_not_verified', 'That payment does not cover this order.');
     await claimPaymentRef(ctx, payRef, 'order'); // one payment, one use, across purchases and orders
   }
@@ -181,16 +195,7 @@ async function giveBack(ctx, h, kind) {
       await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: 0, kind: 'reversal', ref: h.id, lotId: p.lot_id, meta: { not_restored: p.amount } });
       continue;
     }
-    let back = p.amount;
-    if (p.bucket === 'commission') {
-      const lot = await ctx.db.first('SELECT refunded_credits FROM lot WHERE id = ?', p.lot_id);
-      const withheld = Math.min(back, lot?.refunded_credits ?? 0);
-      if (withheld > 0) {
-        await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits - ? WHERE id = ?', withheld, p.lot_id);
-        await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: 0, kind: 'reversal', ref: h.id, lotId: p.lot_id, meta: { not_restored: withheld, refunded_sale: true } });
-        back -= withheld;
-      }
-    }
+    const back = await withholdDebt(ctx, p.lot_id, p.amount, h.id, h.account_id, p.bucket);
     if (back < 1) continue;
     const r = await ctx.db.run('UPDATE lot SET remaining = remaining + ? WHERE id = ? AND remaining + ? <= original', back, p.lot_id, back);
     if (r.changes !== 1) throw new ApiError(500, 'ledger_mismatch', 'Could not give credits back.');
@@ -255,15 +260,17 @@ async function refundOrder(ctx, b) {
       await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: 0, kind: 'reversal', ref: h.id, lotId: p.lot_id, meta: { not_restored: give } });
       continue;
     }
+    const keep = await withholdDebt(ctx, p.lot_id, give, h.id, h.account_id, p.bucket);
+    if (keep < 1) continue;
     let expires = p.expires_at;
     if (expires != null) expires = Math.max(expires, now + s.reinstate_min_days * DAY);
     const id = newId('lot');
     await ctx.db.run(
       "INSERT INTO lot (id, tenant_id, account_id, bucket, original, remaining, created_at, expires_at, eligible_at, source, source_ref, origin) VALUES (?,?,?,?,?,?,?,?,?,'reinstate',?,?)",
-      id, ctx.tenantId, h.account_id, p.bucket, give, give, now, expires, 0, `${h.id}:${p.lot_id}:${p.refunded}`, p.origin,
+      id, ctx.tenantId, h.account_id, p.bucket, keep, keep, now, expires, 0, `${h.id}:${p.lot_id}:${p.refunded}`, p.origin,
     );
-    await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: give, kind: 'reinstate', ref: h.id, lotId: id });
-    returned += give;
+    await post(ctx, { accountId: h.account_id, bucket: p.bucket, delta: keep, kind: 'reinstate', ref: h.id, lotId: id });
+    returned += keep;
   }
   await ctx.db.run('UPDATE hold SET refunded_credits = refunded_credits + ? WHERE id = ?', want, h.id);
   await emit(ctx, 'refund.credits_returned', { hold_id: h.id, account_id: h.account_id, credits: returned });
@@ -294,7 +301,7 @@ async function refundPurchase(ctx, b) {
   const r = await ctx.db.run('UPDATE lot SET remaining = remaining - ?, refunded_minor = refunded_minor + ?, refunded_credits = refunded_credits + ? WHERE id = ? AND remaining >= ?', want, money, want, lot.id, want);
   if (r.changes !== 1) throw new ApiError(409, 'balance_changed', 'Balance changed. Try again.');
   // commission earned on this payment goes back in the same proportion, so a refund cannot leave a referrer paid
-  for (const c of await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND lower(origin) = ? AND remaining > 0", ctx.tenantId, `sale:${payRef}`)) {
+  for (const c of await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND lower(origin) = ?", ctx.tenantId, `sale:${payRef}`)) {
     const owed = Math.ceil((c.original * want) / lot.original);
     const take = Math.min(c.remaining, owed);
     // what could not be taken now (held in an order, or already spent) is remembered and withheld when the hold gives it back

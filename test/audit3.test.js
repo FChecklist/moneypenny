@@ -38,13 +38,13 @@ test('a taken-back sale cannot earn commission afterwards, in any letter case', 
 
 test('a payment notice is idempotent, and a changed figure is refused', async () => {
   const s = await setup();
-  assert.equal((await s.pay.post('/v1/payment_notice', { payment_ref: 'n1', paid_minor: 500, currency: 'USD' })).body.noted, true);
-  const dup = await s.pay.post('/v1/payment_notice', { payment_ref: 'N1', paid_minor: 500, currency: 'USD' }, { idem: 'pay:N1' });
+  assert.equal((await s.pay.post('/v1/payment_notice', { payment_ref: 'n1', paid_minor: 500, currency: 'USD', payer_email: 'a@x.com' })).body.noted, true);
+  const dup = await s.pay.post('/v1/payment_notice', { payment_ref: 'N1', paid_minor: 500, currency: 'USD', payer_email: 'a@x.com' }, { idem: 'pay:N1' });
   assert.equal(dup.body.duplicate, true);
-  const bad = await s.pay.post('/v1/payment_notice', { payment_ref: 'n1', paid_minor: 900, currency: 'USD' }, { idem: 'pay:n1' });
+  const bad = await s.pay.post('/v1/payment_notice', { payment_ref: 'n1', paid_minor: 900, currency: 'USD', payer_email: 'a@x.com' }, { idem: 'pay:n1' });
   assert.equal(bad.body.error.code, 'payment_conflict');
-  assert.equal((await s.api.post('/v1/payment_notice', { payment_ref: 'n2', paid_minor: 5, currency: 'USD' })).status, 403); // product keys cannot note payments
-  assert.equal((await s.ai.post('/v1/payment_notice', { payment_ref: 'n3', paid_minor: 5, currency: 'USD' })).status, 403);
+  assert.equal((await s.api.post('/v1/payment_notice', { payment_ref: 'n2', paid_minor: 5, currency: 'USD', payer_email: 'a@x.com' })).status, 403); // product keys cannot note payments
+  assert.equal((await s.ai.post('/v1/payment_notice', { payment_ref: 'n3', paid_minor: 5, currency: 'USD', payer_email: 'a@x.com' })).status, 403);
 });
 
 test('cash on an order is captured only against a noted payment that covers it', async () => {
@@ -108,9 +108,9 @@ test('a paused account cannot buy credits; health shows no tenant detail', async
 
 test('the same signed body under another key class does not replay the first answer', async () => {
   const s = await setup();
-  const a = await s.pay.post('/v1/payment_notice', { payment_ref: 'z1', paid_minor: 5, currency: 'USD' }, { idem: 'pay:z1' });
+  const a = await s.pay.post('/v1/payment_notice', { payment_ref: 'z1', paid_minor: 5, currency: 'USD', payer_email: 'a@x.com' }, { idem: 'pay:z1' });
   assert.equal(a.status, 200);
-  const b = await s.api.post('/v1/payment_notice', { payment_ref: 'z1', paid_minor: 5, currency: 'USD' }, { idem: 'pay:z1' });
+  const b = await s.api.post('/v1/payment_notice', { payment_ref: 'z1', paid_minor: 5, currency: 'USD', payer_email: 'a@x.com' }, { idem: 'pay:z1' });
   assert.notEqual(b.headers.get('idempotent-replay'), 'true');
 });
 

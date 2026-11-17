@@ -197,7 +197,7 @@ export async function railConfirm(ctx, b) {
     if (o.payment_ref === payRef) return { order_id: o.id, status: 'paid', credited: o.credits, already: true };
     throw new ApiError(409, 'order_already_paid', 'This order was already paid with another payment.');
   }
-  const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
+  const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 10000000000 });
   if (b.currency !== o.currency) throw new ApiError(422, 'payment_mismatch', 'The payment currency does not match the order.');
   if (paid < o.amount_minor) throw new ApiError(422, 'payment_mismatch', 'The payment is less than the order amount.');
   const acc = await ctx.db.first('SELECT email_norm FROM account WHERE id = ?', o.account_id);

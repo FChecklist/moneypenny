@@ -127,15 +127,17 @@ export async function findPayment(ctx, refId) {
 /** The payment side tells us a real payment happened (purchase key). Same ref again with the same figures is a no-op. */
 export async function paymentNotice(ctx, b) {
   const r = payId(b.payment_ref);
-  const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
+  const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 10000000000 });
   const cur = b.currency;
   if (cur !== 'INR' && cur !== 'USD') throw new ApiError(400, 'bad_currency', 'Payment is in INR or USD only.');
-  const prior = await ctx.db.first('SELECT paid_minor, currency FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
+  if (!b.payer_email) throw new ApiError(400, 'bad_request', 'payer_email is required: say who paid.');
+  const payer = canonEmail(emailOrThrow(b.payer_email));
+  const prior = await ctx.db.first('SELECT paid_minor, currency, payer_canon FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, r);
   if (prior) {
-    if (prior.paid_minor !== paid || prior.currency !== cur) throw new ApiError(409, 'payment_conflict', 'This payment id was already noted with different figures.');
+    if (prior.paid_minor !== paid || prior.currency !== cur || prior.payer_canon !== payer) throw new ApiError(409, 'payment_conflict', 'This payment id was already noted with different figures.');
     return { payment_ref: r, noted: true, duplicate: true };
   }
-  await ctx.db.run('INSERT INTO verified_payment (tenant_id, ref, paid_minor, currency, payer_canon, created_at) VALUES (?,?,?,?,?,?)', ctx.tenantId, r, paid, cur, b.payer_email ? canonEmail(emailOrThrow(b.payer_email)) : null, ctx.now());
+  await ctx.db.run('INSERT INTO verified_payment (tenant_id, ref, paid_minor, currency, payer_canon, created_at) VALUES (?,?,?,?,?,?)', ctx.tenantId, r, paid, cur, payer, ctx.now());
   return { payment_ref: r, noted: true };
 }
 
@@ -155,7 +157,7 @@ export async function creditPurchase(ctx, b, { lock = null } = {}) {
   let s = await getSettings(ctx);
   if (lock) s = { ...s, credits_per_usd: lock.rateCpu, inr_paise_per_usd: lock.rateInr }; // an order keeps the rate it was made at
   const amount = int(b.amount, 'amount', { min: 1, max: 100000000 });
-  const paidMinor = int(b.paid_minor, 'paid_minor', { min: 1, max: 100000000000 });
+  const paidMinor = int(b.paid_minor, 'paid_minor', { min: 1, max: 10000000000 });
   const currency = b.currency;
   const payRef = payId(b.payment_ref);
   if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, payRef)) throw new ApiError(409, 'payment_reversed', 'That payment was taken back.');
@@ -220,7 +222,7 @@ export async function processEvent(ctx, b) {
     const payer = normEmail(b.payer_email);
     if (!payer) return reject(ctx, ev, 'payer_required', rb);
     if (canonEmail(payer) === canon) return reject(ctx, ev, 'self_referral', rb);
-    if (!Number.isInteger(b.cash_minor) || b.cash_minor <= 0 || b.cash_minor > 100000000000) return reject(ctx, ev, 'no_cash_no_commission', rb);
+    if (!Number.isInteger(b.cash_minor) || b.cash_minor <= 0 || b.cash_minor > 10000000000) return reject(ctx, ev, 'no_cash_no_commission', rb);
     // The sale itself must be named (the real payment id), and each sale can pay commission once per tenant.
     if (typeof b.sale_ref !== 'string' || !/^[A-Za-z0-9._:/=+-]{1,100}$/.test(b.sale_ref) || /^sale:/i.test(b.sale_ref)) return reject(ctx, ev, 'sale_ref_required', rb);
     saleRef = lc(b.sale_ref);

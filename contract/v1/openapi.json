@@ -282,7 +282,7 @@
     },
     "payment_reversed": {
       "status": 409,
-      "meaning": "Some of these credits came from a payment that was taken back. Reject this request."
+      "meaning": "Some of these credits came from a sale that was refunded. Reject this request."
     },
     "price_changed": {
       "status": 409,
@@ -444,7 +444,12 @@
         "x-untrusted-fields": [
           "display.label",
           "display.symbol",
-          "display.unit"
+          "display.unit",
+          "display.text",
+          "display.convert_line",
+          "display.settling_line",
+          "display.terms_url",
+          "display.theme.name"
         ],
         "x-error-codes": [
           "ai_off",
@@ -542,6 +547,9 @@
         },
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [
+          "currency_name",
+          "credits_text",
+          "display_text",
           "currency_name"
         ],
         "x-error-codes": [
@@ -2737,7 +2745,7 @@
         "summary": "Try a dead letter again",
         "description": "Use after the payment rail is fixed.",
         "x-rw": "write",
-        "x-money": false,
+        "x-money": true,
         "x-permission-level": "admin",
         "x-key-classes": [
           "admin"

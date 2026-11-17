@@ -21,10 +21,10 @@ const hex=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join(
 const sha=async s=>hex(await crypto.subtle.digest('SHA-256',enc.encode(s)));
 async function hmac(k,m){const key=await crypto.subtle.importKey('raw',enc.encode(k),{name:'HMAC',hash:'SHA-256'},false,['sign']);return hex(await crypto.subtle.sign('HMAC',key,enc.encode(m)))}
 async function call(method,path,body){
-  const raw=body?JSON.stringify(body):'', ts=String(Date.now()), nonce=crypto.randomUUID();
-  const sig=await hmac($('sec').value,[ts,nonce,method,path,await sha(raw)].join('\\n'));
+  const raw=body?JSON.stringify(body):'', ts=String(Date.now()), nonce=crypto.randomUUID(), idem=method==='GET'?'':crypto.randomUUID();
+  const sig=await hmac($('sec').value,[ts,nonce,method,path,await sha(raw),idem].join('\\n'));
   const h={'x-mnp-key':$('kid').value,'x-mnp-timestamp':ts,'x-mnp-nonce':nonce,'x-mnp-signature':sig};
-  if(method!=='GET'){h['content-type']='application/json';h['idempotency-key']=crypto.randomUUID();}
+  if(method!=='GET'){h['content-type']='application/json';h['idempotency-key']=idem;}
   const r=await fetch(path,{method,headers:h,body:method==='GET'?undefined:raw});
   const j=await r.json(); if(!j.ok) throw new Error(j.error.message); return j;
 }

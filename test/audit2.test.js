@@ -24,7 +24,7 @@ test('commission needs the sale named, and one sale pays once even with new even
 
 test('commission is capped per sale and per day, so a huge cash figure cannot mint credits', async () => {
   const s = await setup();
-  const big = await sale(s.api, { sale_ref: 'S-big', cash_minor: 100000000000 }); // US$1 billion claimed
+  const big = await sale(s.api, { sale_ref: 'S-big', cash_minor: 10000000000 }); // US$100 million claimed
   assert.equal(big.body.granted, 0);
   assert.equal(big.body.reason, 'over_event_limit');
   await s.admin.put('/v1/admin/settings', { commission_daily_cap: 500 });

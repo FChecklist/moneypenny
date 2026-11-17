@@ -194,7 +194,7 @@ test('one payment id can be used once across purchases and order cash', async ()
   await buy(s.api, 'a@x.com', 500, 'PAY-1');
   await buy(s.api, 'b@x.com', 1000, 'pb');
   const r = await res(s.api, { email: 'b@x.com', amount_minor: 1500 });
-  await note(s.api, 'PAY-1', 500);
+  await note(s.api, 'PAY-1', 500, 'USD', 'b@x.com');
   const c = await s.api.post('/v1/spend/capture', { hold_id: r.body.hold_id, payment_ref: 'PAY-1', cash_paid_minor: 500 });
   assert.equal(c.body.error.code, 'payment_already_used');
   const dup = await buy(s.api, 'c@x.com', 100, 'PAY-1');

@@ -63,7 +63,7 @@ export const buy = (api, email, credits, ref, extra = {}) =>
 let ek = 0;
 /** A real payment is noted first (by the payment side), as in life. Pass noNotice: true to skip it. */
 export const note = (api, payment_ref, paid_minor, currency = 'USD', payer_email = undefined) =>
-  (api.pay || api).post('/v1/payment_notice', { payment_ref, paid_minor, currency, ...(payer_email ? { payer_email } : {}) });
+  (api.pay || api).post('/v1/payment_notice', { payment_ref, paid_minor, currency, payer_email: payer_email ?? 'a@x.com' });
 
 export const event = async (api, email, type, extra = {}) => {
   const { noNotice, ...rest } = extra;

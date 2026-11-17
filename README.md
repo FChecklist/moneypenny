@@ -80,3 +80,4 @@ transaction in `buy_credits`, so a very slow rail slows everyone: move it after 
 Nothing schedules the sweep, the daily rate refresh or the webhook sender yet (no cron, no real sender). The first-ever rate
 row is only checked against the technical band (INR 10 to 500), not against a previous rate. The webhook address check is
 name-based; the real sender must also check the resolved IP.
+Denied or failed AI calls (wrong key class, switched off, rolled back) leave only a nonce, not an audit entry. The wording rule is a deny-list plus an allow-list for the symbol; an owner-approved list of currency names would be stricter.

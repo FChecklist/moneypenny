@@ -36,7 +36,7 @@ export function urlStatus(url, { ttlMs = 30000, now = Date.now, fetchFn = fetch 
   return async () => {
     if (now() - at < ttlMs) return last;
     try {
-      const r = await fetchFn(url, { headers: { 'cache-control': 'no-cache' } });
+      const r = await fetchFn(url, { headers: { 'cache-control': 'no-cache' }, signal: AbortSignal.timeout(3000) });
       last = r.ok ? await r.json() : null;
     } catch {
       last = null;

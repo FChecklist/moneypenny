@@ -89,9 +89,13 @@ export async function getSettings(ctx) {
   return out;
 }
 
-/** Normalised for checking: compatibility forms folded, invisible characters removed, lower case. */
-const squash = (t) => String(t).normalize('NFKC').replace(/[\p{Cf}\p{Cc}\s_.-]+/gu, '').toLowerCase();
-const BAD_WORDS = new RegExp(['fa' + 'ke', 'playmoney', 'pretend', 'toymoney', 'mono' + 'polymoney'].join('|'));
+/** Normalised for checking: compatibility forms folded, accents and invisible characters removed, look-alike letters and digits mapped, lower case. */
+const CONFUSE = { '0': 'o', '1': 'l', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '\u0430': 'a', '\u0435': 'e', '\u043e': 'o', '\u0440': 'p', '\u0441': 'c', '\u0445': 'x', '\u0443': 'y', '\u0456': 'i', '\u03bf': 'o', '\u03b1': 'a', '\u0455': 's' };
+const squash = (t) =>
+  [...String(t).normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cc}]/gu, '').toLowerCase()].map((c) => CONFUSE[c] ?? c).join('').replace(/[^a-z]+/g, '');
+const WORDS = [['fa', 'ke'], ['pre', 'tend'], ['worth', 'less'], ['ju', 'nk'], ['tra', 'sh'], ['use', 'less'], ['play', 'money'], ['toy', 'money'], ['mono', 'poly']].map((x) => x.join(''));
+const BAD_WORDS = new RegExp(WORDS.join('|'));
+const CURRENCY_LIKE = /^(usd|us|inr|eur|gbp|aed|rs|s|c|e)$/;
 
 export function validate(key, value) {
   const s = Object.hasOwn(SCHEMA, key) ? SCHEMA[key] : null;
@@ -113,7 +117,8 @@ export function validate(key, value) {
       if (typeof value !== 'string' || !value.length || value.length > 120) throw bad('text up to 120 characters');
       if (/[<>]/.test(value)) throw bad('no angle brackets');
       if (BAD_WORDS.test(squash(value))) throw bad('this wording is not allowed');
-      if (key === 'unit_symbol' && (/\p{Sc}/u.test(value.normalize('NFKC')) || /^[\s\p{Sc}\p{Cf}]*$/u.test(value) || !/^[\p{L}\p{N}]{1,6}$/u.test(value))) throw bad('the symbol is 1 to 6 letters or digits (or "coin"), never a currency sign');
+      if (['currency_name', 'unit_label', 'unit_symbol'].includes(key) && (/\p{Sc}/u.test(value.normalize('NFKC')) || CURRENCY_LIKE.test(squash(value)))) throw bad('a currency sign or code cannot be the name or label (the real-money amount always shows next to it)');
+      if (key === 'unit_symbol' && (/\p{Sc}/u.test(value.normalize('NFKC')) || /^[\s\p{Sc}\p{Cf}]*$/u.test(value) || !/^[A-Za-z0-9]{2,6}$/.test(value))) throw bad('the symbol is 1 to 6 letters or digits (or "coin"), never a currency sign');
       return value;
     case 'url':
       if (value === null) return null;

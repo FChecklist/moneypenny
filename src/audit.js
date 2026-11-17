@@ -21,7 +21,9 @@ export async function verifyAudit(ctx) {
   for (const r of rows) {
     n++;
     const h = await sha256Hex(JSON.stringify([r.tenant_id, r.seq, r.ts, r.actor, r.action, r.detail, prev, r.caller_type, r.key_id]));
-    if (r.seq !== n || r.prev_hash !== prev || r.hash !== h) return { ok: false, broken_at: r.seq };
+    // entries written before the caller type and key id existed were hashed without them
+    const legacy = r.caller_type === 'system' && r.key_id == null ? await sha256Hex(JSON.stringify([r.tenant_id, r.seq, r.ts, r.actor, r.action, r.detail, prev])) : null;
+    if (r.seq !== n || r.prev_hash !== prev || (r.hash !== h && r.hash !== legacy)) return { ok: false, broken_at: r.seq };
     prev = r.hash;
   }
   return { ok: true, entries: n };

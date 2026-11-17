@@ -10,7 +10,7 @@ import { post } from './ledger.js';
 import { emit } from './outbox.js';
 import { audit } from './audit.js';
 import { createLot, claimPaymentRef, findPayment, payId } from './wallet.js';
-import { isReversed } from './spend.js';
+import { isReversed, withholdDebt } from './spend.js';
 
 /** Pure calculation. gross is in the conversion currency; tds and gst come from settings; no rounding in the person's disfavour on net. */
 export function calculate(s, credits) {
@@ -84,7 +84,8 @@ export async function conversionAction(ctx, id, action, b = {}) {
 
   if (action === 'approve' || action === 'instruct') {
     // credits that came from a payment the bank took back must not become a payout
-    for (const p of await ctx.db.all('SELECT origin FROM conversion_part WHERE request_id = ?', id)) {
+    for (const p of await ctx.db.all('SELECT origin, lot_id FROM conversion_part WHERE request_id = ?', id)) {
+      if (((await ctx.db.first('SELECT refunded_credits r FROM lot WHERE id = ?', p.lot_id))?.r ?? 0) > 0) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a sale that was refunded. Reject this request.');
       if ((await isReversed(ctx, p.origin)) || (p.origin && !(await findPayment(ctx, p.origin.replace(/^sale:/i, ''))))) throw new ApiError(409, 'payment_reversed', 'Some of these credits came from a payment that was taken back. Reject this request.');
     }
   }
@@ -122,8 +123,10 @@ export async function conversionAction(ctx, id, action, b = {}) {
     let back = 0;
     for (const p of await ctx.db.all('SELECT * FROM conversion_part WHERE request_id = ?', id)) {
       if (await isReversed(ctx, p.origin)) continue;
-      lotId = await createLot(ctx, { accountId: r.account_id, bucket: 'commission', amount: p.amount, source: 'reinstate', sourceRef: `cnv:${id}:${p.lot_id}`, createdAt: r.created_at - s.conversion_hold_days * DAY, kind: 'reversal', meta: { conversion_rejected: id }, extRef: null, ...(p.origin ? { origin: p.origin } : {}) });
-      back += p.amount;
+      const keep = await withholdDebt(ctx, p.lot_id, p.amount, id, r.account_id, 'commission');
+      if (keep < 1) continue;
+      lotId = await createLot(ctx, { accountId: r.account_id, bucket: 'commission', amount: keep, source: 'reinstate', sourceRef: `cnv:${id}:${p.lot_id}`, createdAt: r.created_at - s.conversion_hold_days * DAY, kind: 'reversal', meta: { conversion_rejected: id }, extRef: null, ...(p.origin ? { origin: p.origin } : {}) });
+      back += keep;
     }
     await audit(ctx, 'conversion.reject', { id, lot_id: lotId });
     return { id, status: 'rejected', returned_credits: back };
