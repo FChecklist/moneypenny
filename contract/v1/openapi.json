@@ -240,6 +240,10 @@
       "status": 404,
       "meaning": "No such rule."
     },
+    "no_tenant": {
+      "status": 409,
+      "meaning": "Make the first tenant before setting a rate."
+    },
     "not_found": {
       "status": 404,
       "meaning": "No such route."

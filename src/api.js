@@ -228,9 +228,10 @@ ${ts}
 ${raw}`))) return fail();
     let b;
     try { b = JSON.parse(raw); } catch { return json(400, { ok: false, error: { code: 'bad_json', message: 'Bad JSON.' } }); }
+    // a signed call is used up as soon as it is seen, whatever happens next (own transaction, so a refusal cannot undo it)
+    const fresh = await db.tx(async (t) => { try { await t.run('INSERT INTO nonce (key_id, nonce, ts) VALUES (?,?,?)', 'setup', sig, ts); return true; } catch { return false; } });
+    if (!fresh) return json(403, { ok: false, error: { code: 'replayed', message: 'This request was already used.' } });
     const out = await db.tx(async (t) => {
-      // a signed call works once (replay is refused for the whole window)
-      try { await t.run('INSERT INTO nonce (key_id, nonce, ts) VALUES (?,?,?)', 'setup', sig, ts); } catch { return { status: 403, body: { ok: false, error: { code: 'replayed', message: 'This request was already used.' } } }; }
       // the global off-switch also stops owner changes that add keys, tenants or prices; taking a key away stays possible
       if (b && b.action !== 'revoke_key' && app.status) {
         const stop = checkStatus(await app.status().catch(() => null), { op: null, method: 'POST', scope: 'admin' });
@@ -258,6 +259,7 @@ ${raw}`))) return fail();
         if (cur && typeof b.rate === 'number' && Math.abs(b.rate * 10000 - cur.r) / cur.r > 0.5) return { status: 422, body: { ok: false, error: { code: 'rate_change_too_big', message: 'That is more than a 50% move from the current rate.' } } };
         const r = await overrideRateIn(t, 'INR', b.rate, now(), b.reason).catch(() => ({ ok: false, error: 'busy' }));
         if (!r.ok) return { status: r.error === 'busy' ? 409 : 422, body: { ok: false, error: { code: r.error === 'busy' ? 'try_again' : 'invalid_rate', message: 'That rate was not accepted.' } } };
+        if (!(await t.first('SELECT 1 x FROM tenant LIMIT 1'))) throw new ApiError(409, 'no_tenant', 'Make the first tenant before setting a rate.');
         for (const x of await t.all('SELECT id FROM tenant')) await audit(owner(x.id), 'fx.set_rate', { currency: 'INR', rate: b.rate });
         return { status: 200, body: { ok: true } };
       }

@@ -47,7 +47,7 @@ export async function getBalance(ctx, email, { details = false } = {}) {
   const now = ctx.now();
   let r = { balance: 0, can_convert: 0, settling: 0, next_expiry: null };
   const buckets = { bought: 0, bonus: 0, commission: 0 };
-  const convertible = s.conversion_enabled && s.tds_rate_bps != null;
+  const convertible = s.conversion_enabled && s.tds_rate_bps != null && s.fx_state !== 'stale';
   if (acc) {
     const lots = await ctx.db.all(
       'SELECT bucket, remaining, expires_at, eligible_at, created_at FROM lot WHERE tenant_id = ? AND account_id = ? AND remaining > 0 AND (expires_at IS NULL OR expires_at > ?)',

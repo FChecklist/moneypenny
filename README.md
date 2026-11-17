@@ -10,7 +10,7 @@ The public name is one setting (`product_name`). The code name is MNP.
 
 - **One balance, three piles underneath.** *Bought* (paid for with real money), *bonus* (free, small, capped), *commission* (earned from real paid sales). The piles never merge, so bought credit can never become cash.
 - **Spending order:** bonus first, then commission, then bought.
-- **Bonus is gentle:** it pays at most half of one order, only after the person's first real paid purchase, and only up to a lifetime limit (about $8).
+- **Bonus is gentle:** it pays at most half of one order, only after the person's first real paid purchase, and only up to a lifetime limit (about US$8).
 - **Holds:** when an order starts, credits are set aside for about 15 minutes. Payment done: *capture*. Payment fails: *release*.
 - **Refunds:** real money only for unspent *bought* credits, and only as a note to IT Services (this system never moves money). A cancelled paid order gives credits back to the pile they came from.
 - **Earning rules** are settings in the database, per tenant. A plain site visit never earns credit.

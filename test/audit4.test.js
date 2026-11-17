@@ -546,3 +546,19 @@ test('A13-1: with no payment side configured, buy_credits refuses and makes no o
   assert.equal(r.status, 503);
   assert.equal((await s.db.first('SELECT COUNT(*) n FROM purchase_order')).n, 0);
 });
+
+test('A14-1: a refused owner setup call is still used up and cannot be replayed; revoke works while off', async () => {
+  const s = await setup();
+  s.app.status = async () => ({ hub: { mode: 'off' } });
+  const ts = s.clock.t;
+  const raw = JSON.stringify({ action: 'issue_key', scope: 'admin', label: 'x' });
+  const sig = await hmacHex(s.master, `mnp-setup\n${ts}\n${raw}`);
+  const call = () => s.app.fetch(new Request('http://x/v1/setup', { method: 'POST', body: raw, headers: { 'x-setup-ts': String(ts), 'x-setup-sig': sig } }));
+  assert.equal((await call()).status, 503);
+  s.app.status = async () => ({ hub: { mode: 'on' } });
+  assert.equal((await call()).status, 403);
+  s.app.status = async () => ({ hub: { mode: 'off' } });
+  const k = (await s.db.first("SELECT key_id FROM api_key LIMIT 1")).key_id;
+  assert.equal((await setupCall(s, { action: 'revoke_key', key_id: k })).status, 200);
+  assert.equal((await setupCall(s, { action: 'set_rate', rate: 92 })).status, 503);
+});
