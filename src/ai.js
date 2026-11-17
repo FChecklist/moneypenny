@@ -20,10 +20,12 @@ const ASKABLE = {
     clean(p) {
       return { email: emailOrThrow(p.email), product: ref(p.product, 'product', 60), item: ref(p.item, 'item', 60), order_ref: ref(p.order_ref, 'order_ref') };
     },
+    op: 'reserveItem',
     run: (ctx, p) => reserveItem(ctx, p),
   },
   conversion: {
     clean: (p) => ({ email: emailOrThrow(p.email), credits: int(p.credits, 'credits', { min: 1, max: 1000000000 }) }),
+    op: 'convertRequest',
     run: (ctx, p) => convertRequest(ctx, p),
   },
   refund: {
@@ -35,6 +37,7 @@ const ASKABLE = {
       if (p.credits != null) o.credits = int(p.credits, 'credits', { min: 1, max: 1000000000 });
       return o;
     },
+    op: 'refund',
     run: (ctx, p) => refund(ctx, p, p.type === 'order' ? 'api' : 'purchase'),
   },
   payout: {
@@ -42,6 +45,7 @@ const ASKABLE = {
       if (p.step !== 'approve' && p.step !== 'instruct') throw bad("step must be 'approve' or 'instruct'. Marking a payout paid is typed by a person.");
       return { conversion_id: ref(p.conversion_id, 'conversion_id', 100), step: p.step };
     },
+    op: 'adminConversionStep',
     run: (ctx, p) => conversionAction(ctx, p.conversion_id, p.step, {}),
   },
   rate_change: {
@@ -55,6 +59,7 @@ const ASKABLE = {
       }
       return { settings: out };
     },
+    op: 'adminSetSettings',
     run: (ctx, p) => setSettings(ctx, p.settings).then(() => ({ changed: Object.keys(p.settings) })),
   },
   price_change: {
@@ -62,6 +67,7 @@ const ASKABLE = {
       product: ref(p.product, 'product', 60), item: ref(p.item, 'item', 60), credits: int(p.credits, 'credits', { min: 1, max: 1000000000 }),
       ...(p.active === 0 || p.active === false ? { active: 0 } : {}),
     }),
+    op: 'adminSetCatalogue',
     run: (ctx, p) => setCatalogue(ctx, p),
   },
 };
@@ -110,6 +116,11 @@ export async function decide(ctx, id, verb) {
   if (!r) throw new ApiError(404, 'no_approval', 'No such request.');
   if (r.status !== 'pending') throw new ApiError(409, 'already_decided', `This request is already ${r.status}.`);
   if (verb === 'approve' && ctx.now() > r.expires_at) throw new ApiError(409, 'approval_expired', 'This request ran out of time. Ask again.');
+  // the Hub can switch off the action itself: approving cannot get around that (the request stays waiting)
+  if (verb === 'approve' && ctx.opAllowed) {
+    const stop = await ctx.opAllowed(ASKABLE[r.action].op);
+    if (stop) throw new ApiError(503, stop.code, stop.message);
+  }
   const won = await ctx.db.run("UPDATE approval_request SET status = ?, decided_by_key = ?, decided_at = ? WHERE id = ? AND status = 'pending'", verb === 'approve' ? 'approved' : 'rejected', ctx.actor, ctx.now(), id);
   if (won.changes !== 1) throw new ApiError(409, 'already_decided', 'This request was just decided.');
   let result = null;

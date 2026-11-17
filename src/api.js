@@ -180,7 +180,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
 
       // 2) the work, all or nothing
       const out = await db.tx(async (t) => {
-        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, requireRate: app.requireRate, cache: app.cache, scope: auth.scope, actor: auth.keyId, keyId: auth.keyId, callerType: CALLER[auth.scope], idem: idem || null, _settings: null };
+        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, requireRate: app.requireRate, opAllowed: app.status ? async (id) => checkStatus(await app.status().catch(() => null), { op: { id }, method: 'POST', scope: 'admin' }) : null, cache: app.cache, scope: auth.scope, actor: auth.keyId, keyId: auth.keyId, callerType: CALLER[auth.scope], idem: idem || null, _settings: null };
         const set = await getSettings(ctx);
         if (set.kill_switch && auth.scope !== 'admin') throw new ApiError(503, 'paused', 'This service is switched off for now.');
         if (auth.scope === 'ai_read' && !set.ai_enabled) throw new ApiError(403, 'ai_off', 'AI access is switched off for this tenant.');

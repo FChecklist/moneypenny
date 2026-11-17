@@ -123,6 +123,7 @@ export function validate(key, value) {
       if (typeof value !== 'string' || !value.length || value.length > 120) throw bad('text up to 120 characters');
       if (/[<>]/.test(value)) throw bad('no angle brackets');
       if (BAD_WORDS.test(squash(value))) throw bad('this wording is not allowed');
+      if (key.startsWith('wording_') && /\p{Sc}/u.test(value.normalize('NFKC'))) throw bad('no currency sign in this line');
       if (['currency_name', 'unit_label', 'unit_symbol'].includes(key) && (/\p{Sc}/u.test(value.normalize('NFKC')) || CURRENCY_LIKE.test(squash(value)) || tokens(value).some((w) => CURRENCY_LIKE.test(w)))) throw bad('a currency sign or code cannot be the name or label (the real-money amount always shows next to it)');
       if (key === 'unit_symbol' && (/\p{Sc}/u.test(value.normalize('NFKC')) || /^[\s\p{Sc}\p{Cf}]*$/u.test(value) || !/^[A-Za-z0-9]{2,6}$/.test(value))) throw bad('the symbol is 1 to 6 letters or digits (or "coin"), never a currency sign');
       return value;

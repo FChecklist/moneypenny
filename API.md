@@ -18,7 +18,7 @@ signature = hex( HMAC-SHA256( secret, [timestamp, nonce, METHOD, pathWithQuery, 
 - Callers must send only **verified** e-mail addresses. Identity is the lower-cased e-mail.
 
 `GET /health` (open): `ok, db, rail{name,ok}, fx{state,as_of}; nothing about any tenant`. No tenant data.
-Idempotency keys starting `pay:` are reserved for the payment routes and must equal `pay:<payment_ref>`.
+Idempotency keys starting `pay:` are reserved for the payment routes and must be `pay:<payment_ref>` or `pay:<route>:<payment_ref>`.
 
 ## Money units
 
@@ -74,10 +74,10 @@ Ledger entry kinds: `purchase, bonus, commission, hold, capture, release, releas
 | `GET /v1/admin/dead_letters`, `POST /v1/admin/dead_letters/requeue {id}` | rail calls that failed 8 times; requeue after the rail is fixed |
 | `POST /v1/admin/rail/process` | send due rail calls now |
 | `POST /v1/admin/freeze` | `{email, frozen:true or false}` |
-| `GET /v1/admin/approvals`, `POST /v1/admin/approvals/:id/approve` or `/deny` | people decide what an AI key asked for |
+| `GET /v1/admin/approvals`, `POST /v1/admin/approvals/:id/approve` or `/reject` | people decide what an AI key asked for |
 | `POST /v1/admin/webhooks` | `{url}` (public https host; http only for localhost); the secret is shown once |
 
-Tenants and keys are made by the owner's local script only, never by the API.
+Tenants and keys are made by the owner's signed `POST /v1/setup` call or the local script; never by a product key.
 `npm run reconcile` prints the same liability view across every tenant (read-only).
 
 ## Conversion engine (off by default)

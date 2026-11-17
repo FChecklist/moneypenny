@@ -562,3 +562,15 @@ test('A14-1: a refused owner setup call is still used up and cannot be replayed;
   assert.equal((await setupCall(s, { action: 'revoke_key', key_id: k })).status, 200);
   assert.equal((await setupCall(s, { action: 'set_rate', rate: 92 })).status, 503);
 });
+
+test('A15-1: approving an AI request cannot get around a Hub switch-off of that action; no currency sign in wording lines', async () => {
+  const s = await setup();
+  const ask = await s.ai.post('/v1/ai/ask', { action: 'price_change', params: { product: 'demo_product', item: 'sample_item', credits: 700 } });
+  assert.equal(ask.status, 200);
+  s.app.status = async () => ({ hub: { mode: 'on' }, products: { mnp: { mode: 'on', disabled_actions: ['adminSetCatalogue'] } } });
+  const r = await s.admin.post(`/v1/admin/approvals/${ask.body.approval_id}/approve`, {});
+  assert.equal(r.status, 503);
+  s.app.status = async () => ({ hub: { mode: 'on' } });
+  assert.equal((await s.admin.post(`/v1/admin/approvals/${ask.body.approval_id}/approve`, {})).status, 200);
+  assert.equal((await s.admin.put('/v1/admin/settings', { wording_convert_line: 'You get ₹{amount}' })).status, 400);
+});
