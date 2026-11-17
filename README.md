@@ -1,7 +1,7 @@
 # Corporate Moneypenny
 
-A small ledger that keeps **Moneypenny Credits** for people: what they have, what they spent, what they earned.
-The currency name, unit word and symbol are tenant settings (default "Moneypenny Credits", "credits", "MC"). 100 credits = US$1 (also a setting). One balance on screen. Phase 0: runs on this laptop only. Nothing is live.
+A small ledger that keeps **Moneypenny** for people: what they have, what they spent, what they earned.
+The currency name, unit word and symbol are tenant settings (default "Moneypenny", "credits", "MC"). 100 credits = US$1 (also a setting). One balance on screen. Phase 0: runs on this laptop only. Nothing is live.
 
 **Status:** local build. Not deployed. No payments, no cash-out, no real accounts.
 The public name is one setting (`product_name`). The code name is MNP.

@@ -473,7 +473,7 @@
                   "conversion_enabled": false,
                   "fx_stale": false,
                   "display": {
-                    "label": "Moneypenny Credits",
+                    "label": "Moneypenny",
                     "symbol": "MC",
                     "unit": "credits",
                     "credits": 1250,
@@ -566,7 +566,7 @@
                   "ok": true,
                   "credits": 2000,
                   "credits_text": "2,000 credits",
-                  "currency_name": "Moneypenny Credits",
+                  "currency_name": "Moneypenny",
                   "usd": "20.00",
                   "usd_minor": 2000,
                   "inr_minor": 147000,

@@ -14,10 +14,14 @@ export function renderBalance(display, { theme } = {}) {
   const themed = display.theme ? ` data-theme="${esc(t.name)}"` : '';
   const line = display.convert_line ? `<div class="mnp-line">${esc(display.convert_line)}</div>` : '';
   const settling = display.settling_line ? `<div class="mnp-line mnp-soft">${esc(display.settling_line)}</div>` : '';
+  // the icon is our own fixed drawing; only that exact kind of markup is let through
+  const okSvg = display.symbol === 'coin' && typeof display.icon_svg === 'string' && /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"[^<>]*>(<(circle|path)[^<>]*\/>)+<\/svg>$/.test(display.icon_svg);
+  const coin = okSvg ? `<span class="mnp-coin">${display.icon_svg}</span> ` : display.symbol && display.symbol !== 'coin' ? `<span class="mnp-coin">${esc(display.symbol)}</span> ` : '';
+  const terms = typeof display.terms_url === 'string' && /^https:\/\/[A-Za-z0-9._\/-]+$/.test(display.terms_url) ? `<div class="mnp-line mnp-soft"><a href="${esc(display.terms_url)}">Terms</a></div>` : '';
   return (
     `<div class="mnp-balance"${themed} style="--mnp-accent:${accent}">` +
     `<div class="mnp-label">${esc(display.label)}</div>` +
-    `<div class="mnp-amount">${esc(display.amount)}</div>${line}${settling}</div>`
+    `<div class="mnp-amount">${coin}${esc(display.amount)}</div>${line}${settling}${terms}</div>`
   );
 }
 
@@ -25,7 +29,7 @@ export const STYLE = `
 .mnp-balance{font:15px/1.4 system-ui,sans-serif;display:inline-block;padding:10px 14px;border-radius:12px;border:2px solid var(--mnp-accent,#0b6b57);background:#fff;color:#1c1c1c}
 .mnp-balance[data-theme="classic"]{border-radius:4px 14px 4px 14px;box-shadow:3px 3px 0 var(--mnp-accent,#0b6b57)}
 .mnp-label{font-size:12px;letter-spacing:.04em;color:var(--mnp-accent,#0b6b57)}
-.mnp-amount{font-size:26px;font-weight:700}
+.mnp-amount{font-size:26px;font-weight:700}.mnp-coin{display:inline-block;vertical-align:-.12em}
 .mnp-line{font-size:13px;margin-top:2px}.mnp-soft{opacity:.7}
 @media (prefers-color-scheme:dark){.mnp-balance{background:#1b1b1b;color:#eee}}`;
 

@@ -226,6 +226,13 @@ test('white label: renamed currency, and no response forces the Moneypenny name'
 test('default currency name and unit', async () => {
   const s = await setup();
   const d = (await s.read.get('/v1/balance?email=a@x.com')).body.display;
-  assert.equal(d.label, 'Moneypenny Credits');
-  assert.equal(d.unit, 'credits');
+  assert.equal(d.label, 'Moneypenny');
+  assert.equal(d.unit, 'moneypenny');
+  assert.equal(d.symbol, 'coin');
+  assert.match(d.icon_svg, /^<svg /);
+  assert.equal(d.text, '0 Moneypenny = US$0.00');
+  const q = (await s.read.get('/v1/quote?credits=150')).body;
+  assert.match(q.display_text, /^150 Moneypenny = US\$1\.50 \(about Rs /);
+  // never a bare symbol
+  assert.ok(!/^[$]/.test(q.display_text));
 });

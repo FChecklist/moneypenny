@@ -3,7 +3,7 @@
 // rail (IT Services) through a pluggable adapter. Rail calls wait in an outbox, are retried, and end
 // up as dead letters a person can requeue. Phase 0 ships only the stub rail.
 import { ApiError, MIN, newId, int, ref, isUniqueError } from './util.js';
-import { getSettings, minorFromCredits, creditsFromMinor, fmtUsd, fmtCredits } from './settings.js';
+import { getSettings, minorFromCredits, creditsFromMinor, fmtUsd, fmtCredits, displayText } from './settings.js';
 import { findAccount, ensureAccount } from './accounts.js';
 import { creditPurchase } from './wallet.js';
 import { displayRate, currentRate } from './fx.js';
@@ -76,6 +76,8 @@ export async function quote(ctx, credits, currency = null) {
     const r = await displayRate(ctx, s.display_currency);
     out.local = r ? { currency: s.display_currency, amount: ((credits / s.credits_per_usd) * r.units_per_usd).toFixed(2), display_only: true, rate_as_of: new Date(r.as_of).toISOString() } : null;
   }
+  const localText = out.local ? `about ${out.local.amount} ${out.local.currency}` : `about Rs ${(out.inr_minor / 100).toFixed(2)}`;
+  out.display_text = displayText(s, credits, localText);
   return out;
 }
 

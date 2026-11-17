@@ -6,9 +6,10 @@ import { currentRate } from './fx.js';
 
 export const SCHEMA = {
   product_name: { type: 'str', def: 'Corporate Moneypenny', doc: 'Public product name shown to people.' },
-  currency_name: { type: 'str', def: 'Moneypenny Credits', doc: 'Name of the credit currency shown to people (a tenant can rename it).' },
-  unit_label: { type: 'str', def: 'credits', doc: 'Word used after a number of credits.' },
-  unit_symbol: { type: 'str', def: 'MC', doc: 'Short symbol for the currency. It is never a dollar sign.' },
+  currency_name: { type: 'str', def: 'Moneypenny', doc: 'Name of the currency shown to people (a tenant can rename it).' },
+  unit_label: { type: 'str', def: 'moneypenny', doc: 'Word used after a number (lower case).' },
+  unit_symbol: { type: 'str', def: 'coin', doc: "Symbol. 'coin' shows the built-in coin icon; any other text is shown as is. Never a bare dollar sign." },
+  terms_url: { type: 'url', def: null, doc: 'Link to the terms (an artificial in-product currency for these websites only). Shown next to the balance.' },
   credits_per_usd: { type: 'int', def: 100, min: 1, max: 100000, doc: 'Credits per US$1 (100 = one credit is one cent).' },
   inr_paise_per_usd: { type: 'int', def: 7000, min: 100, max: 1000000, doc: 'Paise per US$1 (7000 = Rs 70). Used only until the daily rate table has a rate; after that the table (plus fx_margin_bps) is used.' },
   base_currency: { type: 'cur', def: 'INR', doc: 'Currency a person pays in by default (INR or USD; nothing else can be paid in).' },
@@ -107,6 +108,10 @@ export function validate(key, value) {
       if (typeof value !== 'string' || !value.length || value.length > 120) throw bad('text up to 120 characters');
       if (/[<>]/.test(value)) throw bad('no angle brackets');
       return value;
+    case 'url':
+      if (value === null) return null;
+      if (typeof value !== 'string' || value.length > 200 || !/^https:\/\/[A-Za-z0-9.-]+(\/[A-Za-z0-9._~\/%?=&#-]*)?$/.test(value)) throw bad('null or an https link');
+      return value;
     case 'cur':
       if (value !== 'INR' && value !== 'USD') throw bad("must be 'INR' or 'USD'");
       return value;
@@ -172,4 +177,7 @@ export function fmtUsd(s, credits) {
 }
 export const fmtCredits = (n) => Number(n).toLocaleString('en-US');
 /** "2,000 credits (US$20.00)" - credits first, US$ second. */
-export const creditsText = (s, n) => `${fmtCredits(n)} ${s.unit_label} (US$${fmtUsd(s, n)})`;
+export const creditsText = (s, n) => `${fmtCredits(n)} ${s.currency_name} = US$${fmtUsd(s, n)}`;
+/** Never a bare symbol: the name and the real-money companion always go together. */
+export const displayText = (s, n, localText = null) => `${creditsText(s, n)}${localText ? ` (${localText})` : ''}`;
+export const COIN_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" role="img" aria-label="coin"><circle cx="12" cy="12" r="10" fill="#f2b632" stroke="#a8741a" stroke-width="2"/><circle cx="12" cy="12" r="6.5" fill="none" stroke="#a8741a" stroke-width="1.5"/><path d="M9.5 15V9l2.5 3 2.5-3v6" fill="none" stroke="#a8741a" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';

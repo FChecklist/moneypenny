@@ -1,6 +1,6 @@
 // Lots, balance, expiry, and the ways credit comes in (purchase, rule event, hand-given bonus).
 import { ApiError, DAY, newId, int, ref, str, isUniqueError, canonEmail, normEmail } from './util.js';
-import { getSettings, creditsFromMinor, fmtUsd, fmtCredits, creditsText } from './settings.js';
+import { getSettings, creditsFromMinor, fmtUsd, fmtCredits, creditsText, COIN_SVG } from './settings.js';
 import { calculate } from './convert.js';
 import { ensureAccount, findAccount, addPaid, emailOrThrow } from './accounts.js';
 import { post } from './ledger.js';
@@ -73,6 +73,9 @@ export async function getBalance(ctx, email, { details = false } = {}) {
     display: {
       label: s.currency_name,
       symbol: s.unit_symbol,
+      icon_svg: s.unit_symbol === 'coin' ? COIN_SVG : null,
+      terms_url: s.terms_url ?? null,
+      text: creditsText(s, r.balance),
       unit: s.unit_label,
       credits: r.balance,
       amount: fmtCredits(r.balance),

@@ -19,7 +19,7 @@ Nothing here is final. Every default is a setting and can change without code.
 Design rules from the owner (17 Nov): Moneypenny is a separate product, linked to games and other products by API only, with no end-user login or page. It is the complete credit register (rates locked per entry, real-money value, TDS/GST fields, outside payment id). Conversion is a calculating skeleton behind a stub payment rail, off by default. Payments reach it only through IT Services' `purchase` key.
 
 Added 17 Nov (gate and rates), all settings:
-- Currency name "Moneypenny Credits" (tenant setting; no $ sign as the unit). The word is visible to end users, so the trademark check applies to it.
+- Currency name "Moneypenny" (tenant setting; no $ sign as the unit). The word is visible to end users, so the trademark check applies to it.
 - Daily rate: fixed per UTC day. **No approval gate on jumps** (owner ruling 17 Nov): a big but valid move is accepted and only noted. A rate that is missing, zero, negative or not a number is rejected, yesterday's rate is kept and an alert (`fx.rate_rejected`) is raised. The last good rate is used up to 72 hours (`fx_max_age_hours`), then new INR orders pause (USD still works).
 - FX margin default **5%** (`fx_margin_bps` 500, a tenant setting). INR prices round up to the whole rupee.
 - Order lock: **120 minutes** (`rate_lock_minutes`). Inside it an order keeps its rate and credits. After it an unpaid order is marked failed, but a payment that still arrives is credited, re-priced at the then-current rate (money is never kept without credits).

@@ -137,7 +137,7 @@ test('tenants cannot see or touch each other', async () => {
   // admin keys only reach their own tenant's settings and rules
   const ba = b.admin;
   await ba.put('/v1/admin/settings', { currency_name: 'Pts' });
-  assert.equal((await s.admin.get('/v1/admin/settings')).body.settings.currency_name, 'Moneypenny Credits');
+  assert.equal((await s.admin.get('/v1/admin/settings')).body.settings.currency_name, 'Moneypenny');
   assert.equal((await ba.get('/v1/admin/rules')).body.rules.length, 0);
   assert.equal((await s.admin.get('/v1/admin/rules')).body.rules.length, 5);
 });
