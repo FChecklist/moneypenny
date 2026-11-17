@@ -537,3 +537,12 @@ test('A12-2: setup call cannot be replayed; keys can be issued and revoked; quot
   const raw2 = JSON.stringify({ action: 'revoke_key', key_id: k.key_id });
   assert.equal((await s.mk({ key_id: k.key_id, secret: k.secret }).get('/v1/balance?email=a@x.com')).status, 401);
 });
+
+import { unconfiguredRail } from '../src/rail.js';
+test('A13-1: with no payment side configured, buy_credits refuses and makes no order', async () => {
+  const s = await setup();
+  s.app.rail = unconfiguredRail;
+  const r = await s.api.post('/v1/buy_credits', { email: 'a@x.com', credits: 1000, currency: 'USD', order_ref: 'o1' });
+  assert.equal(r.status, 503);
+  assert.equal((await s.db.first('SELECT COUNT(*) n FROM purchase_order')).n, 0);
+});

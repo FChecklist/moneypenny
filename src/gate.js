@@ -72,7 +72,7 @@ export async function quote(ctx, credits, currency = null) {
   if (currency && currency !== 'INR' && currency !== 'USD') {
     const r = await displayRate(ctx, currency);
     out.local = r ? { currency, amount: ((credits / s.credits_per_usd) * r.units_per_usd).toFixed(2), display_only: true, rate_as_of: new Date(r.as_of).toISOString() } : null;
-  } else if (s.display_currency) {
+  } else if (s.display_currency && !(s.display_currency === 'INR' && s.fx_state === 'stale')) {
     const r = await displayRate(ctx, s.display_currency);
     out.local = r ? { currency: s.display_currency, amount: ((credits / s.credits_per_usd) * r.units_per_usd).toFixed(2), display_only: true, rate_as_of: new Date(r.as_of).toISOString() } : null;
   }
@@ -98,6 +98,7 @@ export async function buyCredits(ctx, b) {
     if (!acc || acc.id !== prior.account_id || prior.credits !== credits || prior.currency !== cur) throw new ApiError(409, 'order_ref_used', 'That order reference was used for a different order.');
     return orderView(prior);
   }
+  if (!ctx.rail || ctx.rail.name === 'not_configured') throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');
   const known = await findAccount(ctx, b.email);
   if (known && known.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
   const acc = await ensureAccount(ctx, b.email, { velocity: true });

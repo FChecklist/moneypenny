@@ -74,16 +74,17 @@ export async function refreshRates(db, source, now) {
 
 /** A person fixes a bad day: a new active row for the rest of today. History is kept (the bad row stays, marked by the newer one). */
 export async function overrideRate(db, currency, value, now, reason) {
+  return db.tx((t) => overrideRateIn(t, currency, value, now, reason));
+}
+export async function overrideRateIn(t, currency, value, now, reason) {
   if (!/^[A-Z]{3}$/.test(currency) || typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || (BAND[currency] && (value < BAND[currency][0] || value > BAND[currency][1]))) return { ok: false, error: 'invalid_rate' };
   const note = `override: ${String(reason || 'no reason given').replace(/[^A-Za-z0-9 _.:,-]/g, '?').slice(0, 100)}`;
-  return db.tx(async (t) => {
-    await t.run(
-      "INSERT INTO fx_rate (currency, rate_x10000, source, fetched_at, valid_from, valid_to, margin_bps, status, note) VALUES (?,?,?,?,?,?,0,'active',?)",
-      currency, toX10000(value), 'manual', now, now, utcDayStart(now) + DAY, note,
-    );
-    await alertAll(t, now, 'fx.rate_overridden', { currency });
-    return { ok: true };
-  });
+  await t.run(
+    "INSERT INTO fx_rate (currency, rate_x10000, source, fetched_at, valid_from, valid_to, margin_bps, status, note) VALUES (?,?,?,?,?,?,0,'active',?)",
+    currency, toX10000(value), 'manual', now, now, utcDayStart(now) + DAY, note,
+  );
+  await alertAll(t, now, 'fx.rate_overridden', { currency });
+  return { ok: true };
 }
 
 /**

@@ -300,6 +300,10 @@
       "status": 409,
       "meaning": "These credits have ended."
     },
+    "rail_not_configured": {
+      "status": 503,
+      "meaning": "Buying credits is not switched on yet."
+    },
     "rail_unavailable": {
       "status": 502,
       "meaning": "The payment side did not answer. Try again."

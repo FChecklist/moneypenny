@@ -56,7 +56,7 @@ Ledger entry kinds: `purchase, bonus, commission, hold, capture, release, releas
 ## Owner setup (not for products)
 `POST /v1/setup`, signed with the master secret instead of a key: headers `x-setup-ts` (milliseconds, within 5 minutes) and `x-setup-sig` = hex HMAC-SHA256(master secret, `mnp-setup
 <ts>
-<body>`). A signed call works once. Actions: `create_tenant {name}` (only while no tenant exists; the keys are shown once), `issue_key {scope, label, tenant_id?}`, `revoke_key {key_id}`, `set_rate {rate, reason}` (INR per US$1; refused if outside 10-500 or more than 50% from the current rate). Use `node scripts/setup.js <url> '<json>'` with `MNP_MASTER_SECRET` set in the environment.
+<body>`). A signed call works once. Actions: `create_tenant {name}` (only while no tenant exists; the keys are shown once), `issue_key {scope, label, tenant_id?}`, `revoke_key {key_id}`, `set_rate {rate, reason}` (INR per US$1; refused if outside 10-500 or more than 50% from the current rate). The global off-switch also stops `create_tenant`, `issue_key` and `set_rate`; `revoke_key` always works. Use `node scripts/setup.js <url> '<json>'` with `MNP_MASTER_SECRET` set in the environment.
 
 ## Admin routes (admin key)
 

@@ -56,6 +56,8 @@ CREATE TABLE conversion_part (
 );
 
 -- How much commission earned on a payment has already been taken back by refunds (so repeated refunds never over- or under-reverse).
+CREATE INDEX nonce_ts ON nonce (ts);
+
 CREATE TABLE sale_reversal (
   tenant_id TEXT NOT NULL REFERENCES tenant(id),
   ref TEXT NOT NULL,

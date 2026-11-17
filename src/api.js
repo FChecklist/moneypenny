@@ -9,7 +9,7 @@ import { convertRequest, conversionAction, listConversions } from './convert.js'
 import * as admin from './admin.js';
 import { adminPage } from './admin-page.js';
 import { stubRail } from './rail.js';
-import { currentRate, overrideRate } from './fx.js';
+import { currentRate, overrideRateIn } from './fx.js';
 import { ask, listApprovals, decide } from './ai.js';
 import { opFor } from './contract.js';
 import { checkStatus } from './status.js';
@@ -115,7 +115,7 @@ const json = (status, obj, extra = {}) =>
   new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
 
 export function createApp({ db, master, now = Date.now, rail = stubRail, status = null, aiWithoutStatus = false, requireRate = false }) {
-  if (!master || master.length < 16) throw new Error('MNP_MASTER_SECRET is required (16+ characters).');
+  if (!master || master.length < 32) throw new Error('MNP_MASTER_SECRET is required (32+ characters).');
 
   async function fetch(request) {
     try {
@@ -231,6 +231,11 @@ ${raw}`))) return fail();
     const out = await db.tx(async (t) => {
       // a signed call works once (replay is refused for the whole window)
       try { await t.run('INSERT INTO nonce (key_id, nonce, ts) VALUES (?,?,?)', 'setup', sig, ts); } catch { return { status: 403, body: { ok: false, error: { code: 'replayed', message: 'This request was already used.' } } }; }
+      // the global off-switch also stops owner changes that add keys, tenants or prices; taking a key away stays possible
+      if (b && b.action !== 'revoke_key' && app.status) {
+        const stop = checkStatus(await app.status().catch(() => null), { op: null, method: 'POST', scope: 'admin' });
+        if (stop) throw new ApiError(503, stop.code, stop.message);
+      }
       const owner = (tenantId) => ({ db: t, now, master, tenantId, actor: 'owner-setup', callerType: 'owner', _settings: null });
       if (b && b.action === 'create_tenant') {
         if (await t.first('SELECT 1 x FROM tenant LIMIT 1')) throw new ApiError(409, 'already_set_up', 'A tenant already exists.');
@@ -251,15 +256,13 @@ ${raw}`))) return fail();
       if (b && b.action === 'set_rate') {
         const cur = await t.first("SELECT rate_x10000 r FROM fx_rate WHERE currency = 'INR' AND status = 'active' ORDER BY id DESC LIMIT 1");
         if (cur && typeof b.rate === 'number' && Math.abs(b.rate * 10000 - cur.r) / cur.r > 0.5) return { status: 422, body: { ok: false, error: { code: 'rate_change_too_big', message: 'That is more than a 50% move from the current rate.' } } };
-        return { status: -1, body: null };
+        const r = await overrideRateIn(t, 'INR', b.rate, now(), b.reason).catch(() => ({ ok: false, error: 'busy' }));
+        if (!r.ok) return { status: r.error === 'busy' ? 409 : 422, body: { ok: false, error: { code: r.error === 'busy' ? 'try_again' : 'invalid_rate', message: 'That rate was not accepted.' } } };
+        for (const x of await t.all('SELECT id FROM tenant')) await audit(owner(x.id), 'fx.set_rate', { currency: 'INR', rate: b.rate });
+        return { status: 200, body: { ok: true } };
       }
       return { status: 400, body: { ok: false, error: { code: 'bad_request', message: 'Unknown action.' } } };
     });
-    if (out.status === -1) {
-      const r = await overrideRate(db, 'INR', b.rate, now(), b.reason).catch(() => ({ ok: false, error: 'busy' }));
-      if (r.ok) await db.tx(async (t) => { for (const x of await t.all('SELECT id FROM tenant')) await audit({ db: t, now, master, tenantId: x.id, actor: 'owner-setup', callerType: 'owner', _settings: null }, 'fx.set_rate', { currency: 'INR', rate: b.rate }); });
-      return json(r.ok ? 200 : r.error === 'busy' ? 409 : 422, r.ok ? { ok: true } : { ok: false, error: { code: r.error === 'busy' ? 'try_again' : 'invalid_rate', message: 'That rate was not accepted.' } });
-    }
     return json(out.status, out.body);
   }
 

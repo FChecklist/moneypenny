@@ -28,20 +28,20 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `commission_expiry_days` | `0` | Days a commission lot stays valid. 0 = no end (it is money owed). |
 | `reinstate_min_days` | `30` | A returned lot is valid for at least this many days. |
 | `bonus_max_order_pct` | `50` | Bonus may pay at most this percent of one order. |
-| `bonus_lifetime_cap` | `800` | Most bonus credits one person can ever earn (800 = $8). |
+| `bonus_lifetime_cap` | `800` | Most bonus credits one person can ever earn (800 = US$8). |
 | `bonus_needs_paid` | `1` | Bonus is spendable only once the person has real paid value on record (net of refunds and chargebacks). |
-| `bonus_unlock_min_credits` | `100` | Real paid value (in credits) needed before bonus can be spent (100 = $1). |
+| `bonus_unlock_min_credits` | `100` | Real paid value (in credits) needed before bonus can be spent (100 = US$1). |
 | `commission_hold_days` | `7` | Days before commission credits can be spent. |
 | `hold_minutes` | `15` | Minutes a reserve (hold) lasts. |
 | `capture_grace_minutes` | `5` | Extra minutes a late payment may still capture a hold. |
 | `min_cash_due_inr` | `100` | Smallest cash left to pay in paise (payment gateway minimum). 0 = none. |
 | `min_cash_due_usd` | `0` | Smallest cash left to pay in cents. 0 = none. |
-| `commission_max_per_event` | `50000` | Largest commission one sale can pay (50000 = $500). |
+| `commission_max_per_event` | `50000` | Largest commission one sale can pay (50000 = US$500). |
 | `commission_daily_cap` | `500000` | Most commission credits paid across the whole tenant per 24 hours. |
 | `manual_bonus_max` | `500` | Largest single hand-given bonus (credits). |
 | `conversion_enabled` | `0` | Commission-to-cash requests. OFF until owner switches it on. |
 | `conversion_hold_days` | `7` | Days a commission lot must age before it counts as convertible. |
-| `conversion_min_credits` | `1500` | Smallest conversion request (1500 = $15). |
+| `conversion_min_credits` | `1500` | Smallest conversion request (1500 = US$15). |
 | `conversion_approval_required` | `1` | A person must approve each conversion request before it can be sent to a payment rail. |
 | `conversion_currency` | `"INR"` | Currency a conversion is calculated in (INR or USD). |
 | `gst_rate_bps` | `null` | GST rate on conversions in basis points. Recorded on entries; unset = none. |
