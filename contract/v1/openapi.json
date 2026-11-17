@@ -330,7 +330,7 @@
     },
     "status_unknown": {
       "status": 503,
-      "meaning": "The off-switch could not be read, so AI access is paused."
+      "meaning": "AI access needs an off-switch source and none is set."
     },
     "too_large": {
       "status": 413,

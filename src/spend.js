@@ -300,15 +300,35 @@ async function refundPurchase(ctx, b) {
   const money = Math.min(lot.paid_minor - lot.refunded_minor, Math.ceil((lot.paid_minor * want) / lot.original));
   const r = await ctx.db.run('UPDATE lot SET remaining = remaining - ?, refunded_minor = refunded_minor + ?, refunded_credits = refunded_credits + ? WHERE id = ? AND remaining >= ?', want, money, want, lot.id, want);
   if (r.changes !== 1) throw new ApiError(409, 'balance_changed', 'Balance changed. Try again.');
-  // commission earned on this payment goes back in the same proportion, so a refund cannot leave a referrer paid
-  for (const c of await ctx.db.all("SELECT * FROM lot WHERE tenant_id = ? AND lower(origin) = ?", ctx.tenantId, `sale:${payRef}`)) {
-    const owed = Math.ceil((c.original * want) / lot.original);
-    const take = Math.min(c.remaining, owed);
-    // what could not be taken now (held in an order, or already spent) is remembered and withheld when the hold gives it back
-    if (owed > take) await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits + ? WHERE id = ?', owed - take, c.id);
-    if (take < 1) continue;
-    await ctx.db.run('UPDATE lot SET remaining = remaining - ? WHERE id = ?', take, c.id);
-    await post(ctx, { accountId: c.account_id, bucket: c.bucket, delta: -take, kind: 'reversal', ref: payRef, lotId: c.id, extRef: payRef, status: 'reversed', meta: { refund_of_sale: true } });
+  // Commission earned on this payment goes back by the sale's cumulative refunded share (all of it once the payment is fully refunded).
+  // What cannot be taken now (held in an order, spent, or inside a conversion) is remembered on the source lot and withheld later.
+  {
+    const fresh = await ctx.db.first('SELECT paid_minor, refunded_minor FROM lot WHERE id = ?', lot.id);
+    const family = await ctx.db.all('SELECT * FROM lot WHERE tenant_id = ? AND lower(origin) = ? ORDER BY created_at DESC', ctx.tenantId, `sale:${payRef}`);
+    const sources = family.filter((c) => c.source !== 'reinstate'); // a reinstated lot is part of its source, not a second sale
+    const sumOrig = sources.reduce((n, c) => n + c.original, 0);
+    const target = fresh.refunded_minor >= fresh.paid_minor ? sumOrig : Math.ceil((sumOrig * fresh.refunded_minor) / fresh.paid_minor);
+    const done = (await ctx.db.first('SELECT clawed FROM sale_reversal WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef))?.clawed ?? 0;
+    let need = target - done;
+    if (need > 0) {
+      for (const c of family) {
+        if (need < 1) break;
+        const take = Math.min(c.remaining, need);
+        if (take < 1) continue;
+        await ctx.db.run('UPDATE lot SET remaining = remaining - ? WHERE id = ?', take, c.id);
+        await post(ctx, { accountId: c.account_id, bucket: c.bucket, delta: -take, kind: 'reversal', ref: payRef, lotId: c.id, extRef: payRef, status: 'reversed', meta: { refund_of_sale: true } });
+        need -= take;
+      }
+      for (const c of sources) {
+        if (need < 1) break;
+        const room = c.original - c.refunded_credits;
+        const owe = Math.min(need, Math.max(0, room));
+        if (owe < 1) continue;
+        await ctx.db.run('UPDATE lot SET refunded_credits = refunded_credits + ? WHERE id = ?', owe, c.id);
+        need -= owe;
+      }
+      await ctx.db.run('INSERT INTO sale_reversal (tenant_id, ref, clawed) VALUES (?,?,?) ON CONFLICT (tenant_id, ref) DO UPDATE SET clawed = excluded.clawed', ctx.tenantId, payRef, target);
+    }
   }
   await flagConversions(ctx, payRef);
   await addPaid(ctx, lot.account_id, -want);

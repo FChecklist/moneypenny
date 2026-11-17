@@ -54,3 +54,11 @@ CREATE TABLE conversion_part (
   origin TEXT,
   PRIMARY KEY (request_id, lot_id)
 );
+
+-- How much commission earned on a payment has already been taken back by refunds (so repeated refunds never over- or under-reverse).
+CREATE TABLE sale_reversal (
+  tenant_id TEXT NOT NULL REFERENCES tenant(id),
+  ref TEXT NOT NULL,
+  clawed INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, ref)
+);

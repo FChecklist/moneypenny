@@ -18,7 +18,7 @@ export async function setup({ other = false } = {}) {
   const clock = { t: T0 };
   const now = () => clock.t;
   const master = randomBytes(24).toString('hex'); // random per run: no secret in code
-  const app = createApp({ db, master, now });
+  const app = createApp({ db, master, now, aiWithoutStatus: true });
   const demo = await db.tx((t) => seedDemo({ db: t, now, master }));
   let b = null;
   if (other) b = await db.tx((t) => createTenant({ db: t, now, master }, { id: 'tenb', name: 'Other' }));

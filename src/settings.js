@@ -90,12 +90,16 @@ export async function getSettings(ctx) {
 }
 
 /** Normalised for checking: compatibility forms folded, accents and invisible characters removed, look-alike letters and digits mapped, lower case. */
-const CONFUSE = { '0': 'o', '1': 'l', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '\u0430': 'a', '\u0435': 'e', '\u043e': 'o', '\u0440': 'p', '\u0441': 'c', '\u0445': 'x', '\u0443': 'y', '\u0456': 'i', '\u03bf': 'o', '\u03b1': 'a', '\u0455': 's' };
+const CONFUSE = { '0': 'o', '1': 'l', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '$': 's', '\u0430': 'a', '\u0435': 'e', '\u043e': 'o', '\u0440': 'p', '\u0441': 'c', '\u0445': 'x', '\u0443': 'y', '\u0456': 'i', '\u03bf': 'o', '\u03b1': 'a', '\u0455': 's', '\u043a': 'k', '\u043c': 'm', '\u0442': 't', '\u0432': 'b', '\u043d': 'h', '\u0192': 'f', '\ua730': 'f', '\u1d00': 'a', '\u1d0b': 'k', '\u1d07': 'e' };
 const squash = (t) =>
   [...String(t).normalize('NFKD').replace(/[\p{M}\p{Cf}\p{Cc}]/gu, '').toLowerCase()].map((c) => CONFUSE[c] ?? c).join('').replace(/[^a-z]+/g, '');
-const WORDS = [['fa', 'ke'], ['pre', 'tend'], ['worth', 'less'], ['ju', 'nk'], ['tra', 'sh'], ['use', 'less'], ['play', 'money'], ['toy', 'money'], ['mono', 'poly']].map((x) => x.join(''));
+const WORDS = [['fa', 'ke'], ['pre', 'tend'], ['worth', 'less'], ['ju', 'nk'], ['tra', 'sh'], ['use', 'less'], ['play', 'money'], ['toy', 'money'], ['mono', 'poly'], ['pho', 'ny'], ['sc', 'am'], ['bo', 'gus'], ['dum', 'my'], ['sh', 'am'], ['imita', 'tion']].map((x) => x.join(''));
 const BAD_WORDS = new RegExp(WORDS.join('|'));
-const CURRENCY_LIKE = /^(usd|us|inr|eur|gbp|aed|rs|s|c|e)$/;
+const CURRENCY_WORDS = ['dollar', 'dollars', 'euro', 'euros', 'rupee', 'rupees', 'pound', 'pounds', 'yen', 'yuan', 'dirham', 'dinar', 'franc', 'peso', 'rand', 'bitcoin', 'ether', 'ethereum', 'tether', 'usdt', 'usdc', 'btc', 'eth', 'rs', 'us', 's', 'c', 'e'];
+const CURRENCY_CODES = (() => {
+  try { return Intl.supportedValuesOf('currency').map((x) => x.toLowerCase()); } catch { return ['usd', 'inr', 'eur', 'gbp', 'aed', 'jpy', 'cad', 'aud', 'chf', 'sgd', 'cny']; }
+})();
+const CURRENCY_LIKE = { test: (t) => CURRENCY_WORDS.includes(t) || CURRENCY_CODES.includes(t) };
 
 export function validate(key, value) {
   const s = Object.hasOwn(SCHEMA, key) ? SCHEMA[key] : null;

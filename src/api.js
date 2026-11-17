@@ -96,7 +96,7 @@ async function creditBonus(c, b) {
 const json = (status, obj, extra = {}) =>
   new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
 
-export function createApp({ db, master, now = Date.now, rail = stubRail, status = null }) {
+export function createApp({ db, master, now = Date.now, rail = stubRail, status = null, aiWithoutStatus = false }) {
   if (!master || master.length < 16) throw new Error('MNP_MASTER_SECRET is required (16+ characters).');
 
   async function fetch(request) {
@@ -136,6 +136,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       if (!route[2].includes(auth.scope)) throw new ApiError(403, 'wrong_key_type', 'This key cannot use this route.');
       const op = opFor(method, url.pathname);
       // The global off-switch (the Hub's status file). AI keys fail closed, everyone else fails open.
+      if (!app.status && auth.scope === 'ai_read' && !aiWithoutStatus) throw new ApiError(503, 'status_unknown', 'AI access needs an off-switch source and none is set.');
       if (app.status) {
         const stop = checkStatus(await app.status().catch(() => null), { op, method, scope: auth.scope });
         if (stop) throw new ApiError(503, stop.code, stop.message);
@@ -182,7 +183,9 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
           result.untrusted = { note: UNTRUSTED_NOTE, fields: op?.untrusted ?? [] };
         }
         const text = JSON.stringify({ ok: true, ...result });
-        if (route[3]) await t.run('INSERT INTO idempotency (tenant_id, key, req_hash, status, response, created_at) VALUES (?,?,?,?,?,?)', ctx.tenantId, idem, reqHash, 200, text, now());
+        // a secret shown once is never kept for replay
+        const kept = route[1] === '/v1/admin/webhooks' || route[1] === '/v1/admin/keys' ? JSON.stringify({ ok: true, replay_note: 'The secret was shown once, when this was made.' }) : text;
+        if (route[3]) await t.run('INSERT INTO idempotency (tenant_id, key, req_hash, status, response, created_at) VALUES (?,?,?,?,?,?)', ctx.tenantId, idem, reqHash, 200, kept, now());
         return { status: 200, text, replay: false };
       });
       return new Response(out.text, { status: out.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...(out.replay ? { 'idempotent-replay': 'true' } : {}) } });

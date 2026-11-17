@@ -301,3 +301,56 @@ test('A6-8. with no off-switch source configured, AI keys stay shut but everyone
   assert.equal((await ai.get('/v1/balance?email=a@x.com')).status, 503);
   assert.equal((await api.get('/v1/balance?email=a@x.com')).status, 200);
 });
+
+// ---------- audit 7 ----------
+test('A7-1. refunds in two steps take back all commission earned on the payment, including commission earned in between', async () => {
+  const s = await setup();
+  await buy(s.api, 'b@y.com', 1000, 'Q1', { paid_minor: 1000 });
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'Q1', credits: 500 });
+  const g = await sale(s.api, { sale_ref: 'Q1', cash_minor: 500, noNotice: true }); // earned on the 500 still paid
+  assert.equal(g.body.granted, 50);
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'Q1', credits: 500 });
+  assert.equal((await s.db.first("SELECT COALESCE(SUM(remaining),0) n FROM lot WHERE bucket = 'commission'")).n, 0);
+});
+
+test('A7-2. half refund takes half; the rest on the second refund; never double-counted after a return', async () => {
+  const s = await setup();
+  await buy(s.api, 'b@y.com', 1000, 'Q2');
+  await sale(s.api, { sale_ref: 'Q2', cash_minor: 1000, noNotice: true }); // 100 commission
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'Q2', credits: 500 });
+  assert.equal((await s.db.first("SELECT COALESCE(SUM(remaining),0) n FROM lot WHERE bucket = 'commission'")).n, 50);
+  await s.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'Q2', credits: 500 });
+  assert.equal((await s.db.first("SELECT COALESCE(SUM(remaining),0) n FROM lot WHERE bucket = 'commission'")).n, 0);
+});
+
+test('A7-3. currency codes and words cannot be the name, label or symbol', async () => {
+  const s = await setup();
+  for (const v of ['JPY', 'CAD', 'AUD', 'CHF', 'SGD', 'USDT', 'USDC', 'BTC', 'ETH', 'dollar', 'Euro', 'Rupee']) {
+    for (const k of ['currency_name', 'unit_label', 'unit_symbol']) assert.equal((await s.admin.put('/v1/admin/settings', { [k]: v })).status, 400, `${k}=${v}`);
+  }
+});
+
+test('A7-4. more look-alikes and belittling words are refused', async () => {
+  const s = await setup();
+  for (const v of ['faкe', 'ƒake', 'ꜰᴀᴋᴇ', 'phony', 'sc4m', 'bogus', 'dummy']) assert.equal((await s.admin.put('/v1/admin/settings', { currency_name: v })).status, 400, v);
+});
+
+test('A7-5. an app built with no off-switch source keeps AI keys shut by default', async () => {
+  const { createApp } = await import('../src/api.js');
+  const { makeClient } = await import('./helpers.js');
+  const s = await setup();
+  const bare = createApp({ db: s.db, master: s.master, now: s.now });
+  assert.equal((await makeClient(bare, s.clock, s.demo.ai_read).get('/v1/balance?email=a@x.com')).status, 503);
+  assert.equal((await makeClient(bare, s.clock, s.demo.api).get('/v1/balance?email=a@x.com')).status, 200);
+});
+
+test('A7-6. a webhook secret is shown once, even to a replay of the same call', async () => {
+  const s = await setup();
+  const a = await s.admin.post('/v1/admin/webhooks', { url: 'https://hooks.example.com/x' }, { idem: 'wh1' });
+  assert.equal(a.status, 200);
+  const secret = JSON.stringify(a.body);
+  const b = await s.admin.post('/v1/admin/webhooks', { url: 'https://hooks.example.com/x' }, { idem: 'wh1' });
+  assert.equal(b.headers.get('idempotent-replay'), 'true');
+  const m = secret.match(/"secret":"([^"]+)"/);
+  if (m) assert.ok(!JSON.stringify(b.body).includes(m[1]));
+});
