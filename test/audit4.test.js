@@ -481,3 +481,36 @@ test('A10-2: a null answer from the Hub never replaces the last good one, and it
   const b = urlStatus('http://x', { ttlMs: 10, now: () => t, fetchFn: async () => { throw new Error('down'); }, store });
   assert.equal((await b()).hub.mode, 'off');
 });
+
+import { hmacHex } from '../src/util.js';
+async function setupCall(s, body, { ts, badSig } = {}) {
+  const raw = JSON.stringify(body);
+  const t = ts ?? s.clock.t;
+  const sig = badSig ? 'x' : await hmacHex(s.master, `mnp-setup\n${t}\n${raw}`);
+  return s.app.fetch(new Request('http://x/v1/setup', { method: 'POST', body: raw, headers: { 'x-setup-ts': String(t), 'x-setup-sig': sig } }));
+}
+test('A11-1: status shapes that do not say a mode are not accepted, and an old good answer ages out', async () => {
+  const w = { op: null, method: 'POST', scope: 'purchase' };
+  for (const bad of [{ hub: { mode: 'on' }, products: { mnp: 'off' } }, { hub: { mode: 'on' }, products: { mnp: false } }, { hub: { mode: 'on' }, products: { mnp: { enabled: false } } }, { hub: { mode: 'on' }, products: { mnp: { mode: 'on', disabled_actions: 'spend' } } }]) assert.equal(checkStatus(bad, w).code, 'status_unknown');
+  let t = 1000;
+  const f = async () => ({ ok: true, json: async () => ({ hub: { mode: 'on' } }) });
+  const a = urlStatus('http://x', { ttlMs: 10, maxAgeMs: 1000, now: () => t, fetchFn: f });
+  assert.ok(await a());
+  const down = urlStatus('http://x', { ttlMs: 10, maxAgeMs: 1000, now: () => t, fetchFn: async () => { throw new Error('d'); }, store: { get: async () => ({ at: t, doc: { hub: { mode: 'on' } } }), set: async () => {} } });
+  assert.ok(await down());
+  t += 5000;
+  assert.equal(await down(), null);
+});
+test('A11-2: owner setup needs the master secret signature; only one tenant; rate is stored', async () => {
+  const s = await setup();
+  assert.equal((await setupCall(s, { action: 'set_rate', rate: 92 }, { badSig: true })).status, 403);
+  assert.equal((await setupCall(s, { action: 'set_rate', rate: 92 }, { ts: s.clock.t - 3600000 })).status, 403);
+  assert.equal((await setupCall(s, { action: 'create_tenant', name: 'Second' })).status, 409);
+  assert.equal((await setupCall(s, { action: 'set_rate', rate: 5 })).status, 422);
+  assert.equal((await setupCall(s, { action: 'set_rate', rate: 92 })).status, 200);
+});
+test('A11-3: INR purchase credit is refused with no usable rate when the service requires one', async () => {
+  const s = await setup({ requireRate: true });
+  const r = await s.pay.post('/v1/credit_purchase', { email: 'a@x.com', amount: 10000, paid_minor: 700000, currency: 'INR', payment_ref: 'INR1' });
+  assert.equal(r.status, 503);
+});

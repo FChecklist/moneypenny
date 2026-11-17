@@ -18,7 +18,8 @@ export async function reconcile(ctx) {
   const sum = (o) => o.bought + o.bonus + o.commission;
   // Credits we still owe in kind or in cash: usable now + parked in orders + queued for conversion.
   out.liability_credits = sum(out.outstanding) + sum(out.held_in_orders) + out.in_conversion;
-  out.ledger = { chain: await verifyChain(ctx), mismatches: await verifyBalances(ctx) };
+  // a full ledger scan is for people (admin health); an AI key gets the numbers only
+  out.ledger = ctx.scope === 'ai_read' ? { skipped: 'full check is for people' } : { chain: await verifyChain(ctx), mismatches: await verifyBalances(ctx) };
   return out;
 }
 

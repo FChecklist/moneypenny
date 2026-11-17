@@ -317,7 +317,7 @@ async function refundPurchase(ctx, b) {
   if (lot.expires_at != null && lot.expires_at <= ctx.now()) throw new ApiError(409, 'purchase_expired', 'These credits have ended.');
   const want = b.credits == null ? lot.remaining : int(b.credits, 'credits', { min: 1 });
   if (want < 1 || want > lot.remaining) throw new ApiError(409, 'credits_already_used', `Only ${lot.remaining} unspent credits can be refunded.`, { refundable_credits: lot.remaining });
-  // Money per credit is what was paid; rounded in the person's favour, never more than is left to refund.
+  // Money per credit is what was paid; rounded down (never more than was paid), never more than is left to refund.
   const doneCr = lot.refunded_credits + want;
   const money = Math.max(0, Math.min(lot.paid_minor - lot.refunded_minor, (doneCr >= lot.original ? lot.paid_minor : Math.floor((lot.paid_minor * doneCr) / lot.original)) - lot.refunded_minor));
   const r = await ctx.db.run('UPDATE lot SET remaining = remaining - ?, refunded_minor = refunded_minor + ?, refunded_credits = refunded_credits + ? WHERE id = ? AND remaining >= ?', want, money, want, lot.id, want);

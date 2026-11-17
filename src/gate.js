@@ -205,7 +205,7 @@ export async function railConfirm(ctx, b) {
   // (the money is in, so it is never refused); it can never buy more credits than the money is worth at that rate.
   const s = await getSettings(ctx);
   const late = ctx.now() > o.lock_until; // fixed when the order was made; changing the setting later does not re-price open orders
-  const repriced = late && o.currency === 'INR';
+  const repriced = late && o.currency === 'INR' && s.fx_state !== 'stale'; // with no usable rate the order's own terms apply
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
   const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr } });
   await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);

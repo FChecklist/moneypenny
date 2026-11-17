@@ -1,5 +1,5 @@
 // The whole HTTP surface. Standard Request/Response so it runs in a Worker, Node or tests alike.
-import { ApiError, sha256Hex } from './util.js';
+import { ApiError, sha256Hex, hmacHex, safeEqual } from './util.js';
 import { authenticate } from './auth.js';
 import { getSettings } from './settings.js';
 import { getBalance, creditPurchase, paymentNotice, creditManualBonus, processEvent, history } from './wallet.js';
@@ -9,7 +9,7 @@ import { convertRequest, conversionAction, listConversions } from './convert.js'
 import * as admin from './admin.js';
 import { adminPage } from './admin-page.js';
 import { stubRail } from './rail.js';
-import { currentRate } from './fx.js';
+import { currentRate, overrideRate } from './fx.js';
 import { ask, listApprovals, decide } from './ai.js';
 import { opFor } from './contract.js';
 import { checkStatus } from './status.js';
@@ -106,9 +106,11 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       if (request.method === 'GET' && url.pathname === '/admin') {
         return new Response(adminPage(), { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'", 'x-frame-options': 'DENY' } });
       }
+      if (Number(request.headers.get('content-length')) > MAX_BODY) throw new ApiError(413, 'too_large', 'Request is too large.');
       const raw = await request.text();
       if (raw.length > MAX_BODY) throw new ApiError(413, 'too_large', 'Request is too large.');
       const method = request.method.toUpperCase();
+      if (method === 'POST' && url.pathname === '/v1/setup') return await setup(request, raw);
       const pathQuery = url.pathname + url.search;
 
       let route = ROUTES.find((r) => r[0] === method && r[1] === url.pathname);
@@ -135,7 +137,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       if (!route) throw new ApiError(404, 'not_found', 'No such route.');
       if (!route[2].includes(auth.scope)) throw new ApiError(403, 'wrong_key_type', 'This key cannot use this route.');
       const op = opFor(method, url.pathname);
-      // The global off-switch (the Hub's status file). AI keys fail closed, everyone else fails open.
+      // The global off-switch (the Hub's status file). If it cannot be read, every change is refused; reads stay open.
       if (!app.status && auth.scope === 'ai_read' && !aiWithoutStatus) throw new ApiError(503, 'status_unknown', 'AI access needs an off-switch source and none is set.');
       if (app.status) {
         const stop = checkStatus(await app.status().catch(() => null), { op, method, scope: auth.scope });
@@ -194,6 +196,33 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       console.error('internal error', e && e.message);
       return json(500, { ok: false, error: { code: 'internal', message: 'Something went wrong on our side. Nothing was changed.' } });
     }
+  }
+
+  // One-time owner setup of a fresh deploy, signed with the master secret (HMAC of time + body, 5 minute window):
+  //   {action:'create_tenant', name}  works only while no tenant exists; the keys are shown once, in this answer.
+  //   {action:'set_rate', rate, reason}  puts the first or a corrected INR rate (US$1 = rate rupees) on the daily table.
+  async function setup(request, raw) {
+    const ts = Number(request.headers.get('x-setup-ts'));
+    const sig = request.headers.get('x-setup-sig') || '';
+    const fail = () => json(403, { error: { code: 'forbidden', message: 'Not allowed.' } });
+    if (!Number.isFinite(ts) || Math.abs(now() - ts) > 5 * 60000) return fail();
+    if (!safeEqual(sig, await hmacHex(master, `mnp-setup
+${ts}
+${raw}`))) return fail();
+    let b;
+    try { b = JSON.parse(raw); } catch { return json(400, { error: { code: 'bad_json', message: 'Bad JSON.' } }); }
+    if (b && b.action === 'create_tenant') {
+      const out = await db.tx(async (t) => {
+        if (await t.first('SELECT 1 x FROM tenant LIMIT 1')) throw new ApiError(409, 'already_set_up', 'A tenant already exists.');
+        return admin.createTenant({ db: t, now, master }, { name: b.name });
+      });
+      return json(200, out);
+    }
+    if (b && b.action === 'set_rate') {
+      const r = await overrideRate(db, 'INR', b.rate, now(), b.reason);
+      return json(r.ok ? 200 : 422, r.ok ? { ok: true } : { error: { code: 'invalid_rate', message: 'That rate is not allowed.' } });
+    }
+    return json(400, { error: { code: 'bad_request', message: 'Unknown action.' } });
   }
 
   async function healthReport() {
