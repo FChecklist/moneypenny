@@ -1,0 +1,86 @@
+openapi: 3.0.3
+info:
+  title: Credits gate API
+  version: 1.0.0
+  description: |
+    Contract for the credit service. Other parts (storefront/payment, products, growth engine) test only against
+    this file and `examples.json`. Every call is signed (see `x-signing`). Money in `*_minor` is paise (INR) or
+    cents (USD). Credits are whole numbers. The currency name shown to people is a tenant setting.
+x-signing:
+  headers: [x-mnp-key, x-mnp-timestamp, x-mnp-nonce, x-mnp-signature]
+  signature: hex(HMAC-SHA256(secret, [timestamp, nonce, METHOD, pathWithQuery, sha256hex(body)].join("\n")))
+  timestamp: milliseconds, within 5 minutes
+  idempotency: every POST/PUT/DELETE needs an Idempotency-Key header (max 120 chars). Keys starting "pay:" are reserved for payment routes and must equal pay:<payment_ref>.
+  key_types: [api, read, purchase, admin]
+servers:
+  - url: https://example.invalid
+paths:
+  /health:
+    get: { summary: Open. Parts working, no tenant data., responses: { '200': { description: ok }, '503': { description: database down } } }
+  /v1/balance:
+    get:
+      summary: Balance for an e-mail (keys read, api)
+      parameters:
+        - { name: email, in: query, required: true, schema: { type: string } }
+        - { name: details, in: query, schema: { type: string, enum: ['1'] }, description: bucket split, api key only }
+      responses: { '200': { description: balance, display, fx_stale; degraded:true when served from cache } }
+  /v1/quote:
+    get:
+      summary: Price of some credits in USD, INR and a display-only currency (keys read, api)
+      parameters:
+        - { name: credits, in: query, required: true, schema: { type: integer, minimum: 1 } }
+        - { name: currency, in: query, schema: { type: string }, description: display-only code such as EUR }
+      responses: { '200': { description: quote } }
+  /v1/catalogue:
+    get:
+      summary: Active price list in credits (keys read, api)
+      parameters: [{ name: product, in: query, schema: { type: string } }]
+      responses: { '200': { description: items } }
+  /v1/spend/reserve_item:
+    post:
+      summary: Reserve the price of a catalogue item, all in credits (key api)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, product, item, order_ref], properties: { email: { type: string }, product: { type: string }, item: { type: string }, order_ref: { type: string }, credits: { type: integer, description: if sent must equal the price } } } } } }
+      responses: { '200': { description: hold }, '402': { description: insufficient_credits (short_by) }, '409': { description: price_changed or order already held/paid }, '404': { description: no_item } }
+  /v1/spend/capture:
+    post: { summary: Capture a hold (key api), requestBody: { content: { application/json: { schema: { type: object, required: [hold_id], properties: { hold_id: { type: string } } } } } }, responses: { '200': { description: captured }, '410': { description: hold expired } } }
+  /v1/spend/release:
+    post: { summary: Release a hold (key api, safe to repeat), responses: { '200': { description: released } } }
+  /v1/spend/reserve:
+    post: { summary: Reserve against a money order with a possible cash part (key api), responses: { '200': { description: hold or hold_id null } } }
+  /v1/buy_credits:
+    post:
+      summary: Ask for a credit purchase order via the payment rail (key api). Credits arrive only on confirmation.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [email, credits, order_ref], properties: { email: { type: string }, credits: { type: integer }, order_ref: { type: string }, currency: { type: string, enum: [INR, USD] } } } } } }
+      responses: { '200': { description: order with status pending_rail or awaiting_payment }, '503': { description: rate_stale (INR) } }
+  /v1/rail/confirm:
+    post:
+      summary: The payment side confirms a payment for an order (key purchase). Idempotent by payment_ref.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [payment_ref, paid_minor, currency], properties: { order_id: { type: string }, order_ref: { type: string }, payment_ref: { type: string }, paid_minor: { type: integer }, currency: { type: string } } } } } }
+      responses: { '200': { description: credited (repriced:true if after the rate lock) }, '422': { description: payment_mismatch }, '409': { description: payment or order already used } }
+  /v1/credit_purchase:
+    post: { summary: Credit bought directly against a verified payment (key purchase), responses: { '200': { description: credited } } }
+  /v1/credit:
+    post: { summary: Hand-given bonus, capped and audited (key api), responses: { '200': { description: granted } } }
+  /v1/event:
+    post: { summary: Earning event; commission needs payer_email, cash_minor, currency, sale_ref (key api), responses: { '200': { description: granted and reason } } }
+  /v1/refund:
+    post: { summary: type order (key api); type purchase or chargeback (key purchase), responses: { '200': { description: returned_credits, money_due_minor } } }
+  /v1/history:
+    get: { summary: Register entries for an e-mail (key api), responses: { '200': { description: entries with locked rates } } }
+  /v1/convert_request:
+    post: { summary: Record a commission-to-cash request (off by default; never pays) (key api), responses: { '200': { description: recorded }, '403': { description: conversion_off } } }
+  /v1/admin/settings: { get: { summary: admin }, put: { summary: admin } }
+  /v1/admin/rules: { get: { summary: admin }, post: { summary: admin } }
+  /v1/admin/catalogue: { get: { summary: admin }, put: { summary: admin, set price in credits } }
+  /v1/admin/dead_letters: { get: { summary: admin, rail calls that failed 8 times } }
+  /v1/admin/dead_letters/requeue: { post: { summary: admin } }
+  /v1/admin/rail/process: { post: { summary: admin, send due rail calls } }
+  /v1/admin/reconcile: { get: { summary: admin, credits owed by bucket and conversions } }
+  /v1/admin/sweep: { post: { summary: admin } }
+  /v1/admin/health: { get: { summary: admin, chain and balance checks } }
+  /v1/admin/audit: { get: { summary: admin } }
+components:
+  schemas:
+    Error:
+      type: object
+      properties: { ok: { type: boolean, enum: [false] }, error: { type: object, properties: { code: { type: string }, message: { type: string } } } }
