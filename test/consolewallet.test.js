@@ -25,6 +25,7 @@ const fund = async (w, side, email = 'o@x.com', buyId = 'b1', ref = 'pay_1') => 
   return { b, c: await side.paymentVerified({ orderId: b.orderId, paymentRef: ref, paidMinor: b.amountMinor, currency: 'INR' }) };
 };
 const spend = (w, extra = {}) => w.spend({ email: 'o@x.com', product: 'tambola', item: 'game_standard', ...extra });
+const refuse = () => Object.assign(new Error('refused'), { definite: true });
 const holdsOpen = async (s) => (await s.db.first("SELECT COUNT(*) AS n FROM hold WHERE status = 'held'")).n;
 
 test('W1: the pack costs exactly Rs 2,399 and credits 3,400, also after the daily rate moves', async () => {
@@ -89,7 +90,7 @@ test('W5: not enough credits: exact code, no game step, no hold left', async () 
 });
 
 test('W6: if the game step fails the credits come back and no hold is left', async () => {
-  const { s, w, side } = await world(async () => { throw new Error('down'); });
+  const { s, w, side } = await world(async () => { throw refuse(); });
   await fund(w, side);
   const r = await spend(w);
   assert.equal(r.code, 'game_step_failed');
@@ -166,7 +167,7 @@ test('W11: a network failure on reserve is never guessed: the order goes to revi
 test('W12: a failed release is kept and retried by the job', async () => {
   let failRelease = true;
   const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { if (failRelease && p === '/v1/spend/release') return { status: 503, body: {} }; return c.post(p, b); } });
-  const { w, side } = await world(async () => { throw new Error('down'); }, wrap);
+  const { w, side } = await world(async () => { throw refuse(); }, wrap);
   await fund(w, side);
   await spend(w);
   assert.equal(w.store.all()[0].status, 'release_failed');
@@ -229,7 +230,7 @@ test('W13f: a late release cannot overwrite an order that was captured meanwhile
 
 test('W13c: a release the hold refuses (already closed) is not retried forever', async () => {
   const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => (p === '/v1/spend/release' ? { status: 409, body: { error: { code: 'hold_already_captured' } } } : c.post(p, b)) });
-  const { w, side } = await world(async () => { throw new Error('down'); }, wrap);
+  const { w, side } = await world(async () => { throw refuse(); }, wrap);
   await fund(w, side);
   await spend(w);
   assert.equal(w.store.all()[0].status, 'needs_review');
@@ -278,4 +279,31 @@ test('W17: the price asked at the order must equal the quoted pack price', async
   const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { const r = await c.post(p, b); if (p === '/v1/buy_credits' && r.status === 200) r.body.amount_minor += 1; return r; } });
   const { w } = await world(async () => {}, wrap);
   assert.equal((await w.startBuy({ email: 'o@x.com', credits: 3400, buyId: 'b1' })).code, 'price_mismatch');
+});
+
+test('W18: an unclear game failure (timeout) never releases the credits: the job repeats the step and captures', async () => {
+  let n = 0;
+  const { s, w, side } = await world(async () => { if (n++ === 0) throw new Error('timeout'); });
+  await fund(w, side);
+  const r = await spend(w);
+  assert.equal(r.code, 'game_step_unknown');
+  assert.equal(w.store.all()[0].status, 'entitling');
+  assert.equal((await w.balance('o@x.com')).balance, 2400); // still held
+  s.clock.t += 3 * MIN;
+  await w.retryStuck();
+  assert.equal(w.store.all()[0].status, 'captured');
+  assert.equal((await w.balance('o@x.com')).balance, 2400);
+});
+
+test('W19: an unclear failure that stays unclear goes to the owner, hold untouched by the job', async () => {
+  const { s, w, side } = await world(async () => { throw new Error('timeout'); });
+  await fund(w, side);
+  await spend(w);
+  s.clock.t += 3 * MIN;
+  await w.retryStuck();
+  assert.equal(w.store.all()[0].status, 'entitling');
+  s.clock.t += 10 * MIN;
+  const out = await w.retryStuck();
+  assert.equal(w.store.all()[0].status, 'needs_review');
+  assert.equal(out.review, 1);
 });

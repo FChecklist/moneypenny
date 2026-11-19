@@ -3,6 +3,7 @@
 // `mnp` is a signed client with get/post returning { status, body } (production: signed fetch to Moneypenny).
 // `games[product].entitle({ email, item, orderRef })` is the game's own existing step (server to server).
 // CONTRACT for each game: entitle is all-or-nothing and idempotent by orderRef (a repeat gives the same result, never a second grant).
+// It throws an error with `definite: true` only when it is SURE nothing was granted (a refusal). Any other failure is treated as unknown.
 // `store` keeps console orders; production: the console database with a unique spend_key and a real compare-and-set.
 //
 // Every status change is a compare-and-set from the status the caller expects. A caller that loses the race stops.
@@ -67,14 +68,16 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     if (!g) return fail('unknown_product', 404);
     if (!email || typeof item !== 'string' || !ID.test(String(spendKey))) return fail('bad_request');
     const id = randomUUID();
-    const orderRef = `${product}-${id}`;
-    const row = { id, orderRef, email, product, item, spendKey: `${short(email)}:${spendKey}`, status: 'new', tries: 0, at: now() };
+    const scoped = `${short(email)}:${spendKey}`;
+    const orderRef = `${product}-${short(scoped)}`; // from the click's key: a retried reserve meets the same order, not a second one
+    const row = { id, orderRef, email, product, item, spendKey: scoped, status: 'new', tries: 0, at: now() };
     const again = store.putNew(id, row); // atomic: one row per scoped key
     if (again) {
       if (again.product !== product || again.item !== item) return fail('key_conflict', 409);
       if (again.status === 'captured') return { ok: true, orderRef: again.orderRef, credits: again.credits, repeat: true };
       if (again.status === 'refused') return fail(again.reason ?? 'refused', 409, { repeat: true });
       if (again.status === 'released') return fail('game_step_failed', 502, { repeat: true });
+      if (['dead_letter', 'needs_review', 'release_failed'].includes(again.status)) return fail('with_owner', 409, { orderRef: again.orderRef, status: again.status });
       return fail('order_in_progress', 409, { orderRef: again.orderRef, status: again.status });
     }
     let r;
@@ -96,8 +99,11 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     }
     try {
       await g.entitle({ email, item, orderRef });
-    } catch {
-      return releaseOrder(id, ['entitling'], 'game_step_failed');
+    } catch (e) {
+      // Only a DEFINITE refusal (error.definite === true) proves nothing was given. Anything else (timeout, network)
+      // is unknown: never release; the job repeats the idempotent step, then captures, or sends it to the owner.
+      if (e?.definite === true) return releaseOrder(id, ['entitling'], 'game_step_failed');
+      return fail('game_step_unknown', 202, { orderRef });
     }
     if (!move(id, ['entitling'], { status: 'entitled' })) return fail('order_in_progress', 409);
     for (let i = 0; i < 3; i++) { // the hold is short: retry at once, with a short back-off, before leaving it to the job
@@ -153,8 +159,9 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
         try {
           await games[row.product].entitle({ email: row.email, item: row.item, orderRef: row.orderRef });
           if (move(row.id, ['reentitling'], { status: 'entitled' })) await capture(row.id);
-        } catch {
-          await releaseOrder(row.id, ['reentitling'], 'game_step_failed');
+        } catch (e) {
+          if (e?.definite === true) await releaseOrder(row.id, ['reentitling'], 'game_step_failed');
+          else store.cas(row.id, ['reentitling'], { status: 'entitling', at: row.at }); // still unknown: keep `at`, it ages to the owner
         }
       } else if (['entitling', 'new', 'reentitling'].includes(row.status) && age >= REENTITLE_UNTIL_MS) move(row.id, [row.status], { status: 'needs_review', reason: 'stuck_before_game_step' });
     }
