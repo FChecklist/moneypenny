@@ -31,7 +31,8 @@ const fund = async (w, side, email = 'o@x.com', buyId = 'b1', ref = 'pay_1') => 
   assert.equal(b.ok, true, JSON.stringify(b));
   return { b, c: await side.paymentVerified({ orderId: b.orderId, paymentRef: ref, paidMinor: b.amountMinor, currency: 'INR' }) };
 };
-const spend = (w, extra = {}) => w.spend({ email: 'o@x.com', product: 'tambola', item: 'game_standard', ...extra });
+let clickNo = 0;
+const spend = (w, extra = {}) => w.spend({ email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: `auto${++clickNo}`, ...extra });
 const held = async (s) => (await s.db.first("SELECT COUNT(*) AS n FROM hold WHERE status = 'held'")).n;
 const ok = async (s) => assert.deepEqual(await verifyBalances(s.ctx()), []); // ledger invariant after every money flow
 const onlyRow = (w) => w.store.all()[0];
@@ -89,7 +90,7 @@ test('B5: an old open order at an old pack price is not handed out after the pri
   const { s, w } = await world();
   assert.equal((await w.startBuy({ email: 'o@x.com', credits: 3400, buyId: 'b1' })).amountMinor, 239900);
   await s.admin.put('/v1/admin/settings', { inr_packs: { 3400: 249900 } });
-  assert.equal((await w.startBuy({ email: 'o@x.com', credits: 3400, buyId: 'b1' })).code, 'price_mismatch'); // the id still points at the old order
+  assert.equal((await w.startBuy({ email: 'o@x.com', credits: 3400, buyId: 'b1' })).code, 'price_changed'); // the id still points at the old order
   assert.equal((await w.startBuy({ email: 'o@x.com', credits: 3400, buyId: 'b2' })).amountMinor, 249900);
 });
 
@@ -120,13 +121,17 @@ test('S2: a repeated click is the same order, never a second grant or charge', a
   await ok(s);
 });
 
-test('S3: not enough credits: exact code, no game step, no hold; the repeat says the same', async () => {
-  const { s, w, calls } = await world();
+test('S3: not enough credits: exact code, no game step, no hold; after buying, the same click works', async () => {
+  const { s, w, side, calls } = await world();
   const a = await spend(w, { spendKey: 'k1' });
   assert.equal(a.code, 'insufficient_credits');
   assert.equal((await spend(w, { spendKey: 'k1' })).code, 'insufficient_credits');
   assert.equal(calls(), 0);
   assert.equal(await held(s), 0);
+  await fund(w, side);
+  assert.equal((await spend(w, { spendKey: 'k1' })).ok, true);
+  assert.equal(calls(), 1);
+  await ok(s);
 });
 
 test('S4: the game definitely refuses: the order is refunded and the credits are back', async () => {
@@ -156,7 +161,7 @@ test('S5: an unclear game failure never frees the credits; the job repeats the s
 });
 
 test('S6: still unclear after an hour: the owner is alerted at once, credits stay spent, nothing is lost', async () => {
-  const { s, w, side, alerts } = await world(() => { throw new Error('timeout'); });
+  const { s, w, side, alerts, calls } = await world(() => { throw new Error('timeout'); });
   await fund(w, side);
   await spend(w);
   for (let i = 0; i < 31; i++) { s.clock.t += 2 * MIN; await w.retryStuck(); }
@@ -164,6 +169,9 @@ test('S6: still unclear after an hour: the owner is alerted at once, credits sta
   assert.deepEqual(alerts, ['game_step_unknown_too_long']);
   assert.equal((await w.balance('o@x.com')).balance, 2400);
   assert.equal((await spend(w, { spendKey: onlyRow(w).spendKey.split(':')[1] })).code, 'with_owner');
+  const n = calls();
+  await w.retryStuck();
+  assert.equal(calls(), n); // no more calls to the game once it is with the owner
   await ok(s);
 });
 
@@ -312,4 +320,20 @@ test('T3: a capture that was done on the server but looked failed is not lost: t
   assert.equal(calls(), 1);
   assert.equal((await w.balance('o@x.com')).balance, 2400);
   await ok(s);
+});
+
+test('P1: a pack order made at an old price is not handed out again after a price change (Moneypenny side), and a spend needs a click key', async () => {
+  const { s, w } = await world();
+  const ref = { email: 'o@x.com', credits: 3400, currency: 'INR', order_ref: 'raw-1' };
+  assert.equal((await s.api.post('/v1/buy_credits', ref)).status, 200);
+  await s.admin.put('/v1/admin/settings', { inr_packs: { 3400: 249900 } });
+  const again = await s.api.post('/v1/buy_credits', ref);
+  assert.equal(again.status, 409);
+  assert.equal(again.body.error.code, 'price_changed');
+  assert.equal((await w.spend({ email: 'o@x.com', product: 'tambola', item: 'game_standard' })).code, 'bad_request');
+});
+
+test('P2: the console key cannot confirm a payment (only the payment side can)', async () => {
+  const { s } = await world();
+  assert.equal((await s.api.post('/v1/rail/confirm', { order_id: 'x', payment_ref: 'p', paid_minor: 1, currency: 'INR' })).status, 403);
 });

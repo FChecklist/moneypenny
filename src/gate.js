@@ -99,6 +99,8 @@ export async function buyCredits(ctx, b) {
   if (prior) {
     const acc = await findAccount(ctx, b.email);
     if (!acc || acc.id !== prior.account_id || prior.credits !== credits || prior.currency !== cur) throw new ApiError(409, 'order_ref_used', 'That order reference was used for a different order.');
+    // An unpaid pack order made at an old pack price is not handed out again after the price changed: use a new order reference.
+    if (prior.fixed_price && ['pending_rail', 'awaiting_payment'].includes(prior.status) && prior.amount_minor !== amount) throw new ApiError(409, 'price_changed', 'The pack price has changed. Start a new order.', { amount_minor: amount });
     return orderView(prior);
   }
   if (!ctx.rail || ctx.rail.name === 'not_configured') throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');

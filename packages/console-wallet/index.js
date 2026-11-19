@@ -81,7 +81,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
 
   /** Step 1 of a buy: create the Moneypenny order for a listed pack. Payment is taken by IT Services (Razorpay). */
   async function startBuy({ email, credits, currency = 'INR', buyId }) {
-    if (!email || !ID.test(String(buyId ?? '')) || !Number.isSafeInteger(credits) || credits <= 0) return fail('bad_request');
+    if (!email || typeof buyId !== 'string' || !ID.test(buyId) || !Number.isSafeInteger(credits) || credits <= 0) return fail('bad_request');
     if (!currencies.includes(currency)) return fail('currency_not_offered'); // USD packs are an open owner decision
     const q = await mnp.get(`/v1/quote?credits=${credits}`);
     if (q.status !== 200 || q.body.inr_fixed !== true) return fail('not_a_pack'); // sell listed packs only
@@ -96,15 +96,17 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
   const balance = async (email) => (await mnp.get(`/v1/balance?email=${encodeURIComponent(email)}`)).body;
 
   /** Spend on a catalogue item. `spendKey` (one per click) makes a repeat return the same order, never a second one. */
-  async function spend({ email, product, item, spendKey = randomUUID() }) {
+  async function spend({ email, product, item, spendKey }) { // spendKey is REQUIRED: one per click, made by the console session
     if (!game(product)) return fail('unknown_product', 404);
-    if (!email || typeof item !== 'string' || !ID.test(String(spendKey))) return fail('bad_request');
+    if (!email || typeof item !== 'string' || typeof spendKey !== 'string' || !ID.test(spendKey)) return fail('bad_request');
     const id = randomUUID();
     const scoped = `${short(email)}:${spendKey}`; // keys belong to one person
     const orderRef = `${product}-${short(scoped)}`; // from the click's key: a retried reserve meets the same order
     const again = await store.putNew(id, { id, orderRef, email, product, item, spendKey: scoped, status: 'new', tries: 0, at: now() });
     if (again) {
       if (again.product !== product || again.item !== item) return fail('key_conflict', 409);
+      // a click refused only for lack of credits may be tried again with the same key after the person buys credits
+      if (again.status === 'refused' && again.reason === 'insufficient_credits' && await store.cas(again.id, ['refused'], { status: 'new', at: now(), tries: 0 })) return answer(await run(again.id));
       return answer(again, true);
     }
     return answer(await run(id));
