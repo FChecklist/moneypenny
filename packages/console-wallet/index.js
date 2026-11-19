@@ -15,16 +15,20 @@ export function memoryStore() {
     put: (id, row) => { rows.set(id, { ...row }); },
     all: () => [...rows.values()].map((r) => ({ ...r })),
     byKey: (key) => [...rows.values()].find((r) => r.spendKey === key) ?? null,
+    // production: unique constraint on spend_key; returns the existing row instead of inserting
+    putNew: (id, row) => { const old = [...rows.values()].find((r) => r.spendKey === row.spendKey); if (old) return old; rows.set(id, { ...row }); return null; },
+    // compare and set on status; returns true when this caller won
+    cas: (id, from, patch) => { const r = rows.get(id); if (!r || !from.includes(r.status)) return false; rows.set(id, { ...r, ...patch }); return true; },
   };
 }
 
 const fail = (code, status = 400, extra = {}) => ({ ok: false, status, code, ...extra });
 const code = (r) => r?.body?.error?.code;
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
-const STALE_MS = 20 * 60 * 1000; // hold 15 min + grace 5 min
+const CLAIM_MS = 2 * 60 * 1000; // a worker that has not finished in 2 minutes is presumed dead
+const REENTITLE_UNTIL_MS = 12 * 60 * 1000; // hold lasts 15 minutes: repeat the game step only while the hold is surely open
 
 export function createWallet({ mnp, games = {}, store = memoryStore(), now = Date.now }) {
-  const inFlight = new Set(); // one worker per order inside this process; the database does compare-and-set in production
   const game = (p) => (typeof p === 'string' && Object.hasOwn(games, p) ? games[p] : null);
 
   /** Prices come from Moneypenny settings (data), never from the page. */
@@ -37,6 +41,10 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
   /** Step 1 of a buy: create the Moneypenny order for a pack. Payment is taken by IT Services (Razorpay). */
   async function startBuy({ email, credits, currency = 'INR', buyId }) {
     if (!email || !ID.test(String(buyId ?? '')) || !Number.isSafeInteger(credits) || credits <= 0) return fail('bad_request');
+    if (currency === 'INR') {
+      const q = await mnp.get(`/v1/quote?credits=${credits}`);
+      if (q.status !== 200 || q.body.inr_fixed !== true) return fail('not_a_pack'); // sell listed packs only
+    }
     const orderRef = `BUY-${buyId}`;
     const r = await mnp.post('/v1/buy_credits', { email, credits, currency, order_ref: orderRef });
     if (r.status !== 200) return fail(code(r) ?? 'buy_failed', r.status);
@@ -53,12 +61,14 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     const g = game(product);
     if (!g) return fail('unknown_product', 404);
     if (!email || typeof item !== 'string' || !ID.test(String(spendKey))) return fail('bad_request');
-    const again = store.byKey(spendKey);
-    if (again) return again.status === 'captured' ? { ok: true, orderRef: again.orderRef, credits: again.credits, repeat: true } : fail('order_in_progress', 409, { orderRef: again.orderRef, status: again.status });
     const id = randomUUID();
     const orderRef = `${product}-${id}`;
     const row = { id, orderRef, email, product, item, spendKey, status: 'new', tries: 0, at: now() };
-    store.put(id, row);
+    const again = store.putNew(id, row); // atomic: one row per key
+    if (again) {
+      if (again.email !== email || again.product !== product || again.item !== item) return fail('key_conflict', 409); // a key is for one click of one person
+      return again.status === 'captured' ? { ok: true, orderRef: again.orderRef, credits: again.credits, repeat: true } : fail('order_in_progress', 409, { orderRef: again.orderRef, status: again.status });
+    }
     let r;
     try {
       r = await mnp.post('/v1/spend/reserve_item', { email, product, item, order_ref: orderRef });
@@ -83,15 +93,17 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
   }
 
   async function releaseOrder(row, why) {
-    let ok = false;
-    try { ok = (await mnp.post('/v1/spend/release', { hold_id: row.holdId })).status === 200; } catch { ok = false; }
-    store.put(row.id, { ...row, status: ok ? 'released' : 'release_failed', reason: why, at: now() });
+    let st = 0;
+    try { st = (await mnp.post('/v1/spend/release', { hold_id: row.holdId })).status; } catch { st = 0; }
+    const tries = (row.tries ?? 0) + 1;
+    // 200 = released. 409 = the hold is already closed (nothing to retry): the owner looks at it.
+    const status = st === 200 ? 'released' : st === 409 || tries >= 3 ? 'needs_review' : 'release_failed';
+    store.put(row.id, { ...row, status, tries, reason: why, at: now() });
     return fail(why, 502);
   }
 
   async function capture(row) {
-    if (inFlight.has(row.id)) return fail('order_in_progress', 409);
-    inFlight.add(row.id);
+    if (!store.cas(row.id, ['entitled', 'capture_retry', 'capturing'], { status: 'capturing', at: now() })) return fail('order_in_progress', 409);
     try {
       let c;
       try { c = await mnp.post('/v1/spend/capture', { hold_id: row.holdId }); } catch { c = { status: 0, body: {} }; }
@@ -104,8 +116,9 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
       const dead = c.status === 410 || tries >= 3;
       store.put(row.id, { ...row, tries, status: dead ? 'dead_letter' : 'capture_retry', reason: code(c) ?? 'capture_failed', at: now() });
       return fail('capture_pending', 202, { orderRef: row.orderRef });
-    } finally {
-      inFlight.delete(row.id);
+    } catch (e) {
+      store.put(row.id, { ...row, status: 'capture_retry', reason: 'capture_error', at: now() });
+      throw e;
     }
   }
 
@@ -115,9 +128,15 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
    */
   async function retryStuck() {
     for (const row of store.all()) {
+      const age = now() - row.at;
       if (row.status === 'entitled' || row.status === 'capture_retry') await capture(row);
+      else if (row.status === 'capturing' && age > CLAIM_MS) { store.put(row.id, { ...row, status: 'capture_retry' }); await capture(store.get(row.id)); }
       else if (row.status === 'release_failed') await releaseOrder(row, row.reason);
-      else if ((row.status === 'entitling' || row.status === 'new') && now() - row.at > STALE_MS) store.put(row.id, { ...row, status: 'needs_review', reason: 'stuck_before_game_step' });
+      else if (row.status === 'entitling' && age > CLAIM_MS && age < REENTITLE_UNTIL_MS) {
+        // crash between the game step and its record: the game step is idempotent by orderRef (contract), so repeat it, then capture
+        try { await games[row.product].entitle({ email: row.email, item: row.item, orderRef: row.orderRef }); store.put(row.id, { ...row, status: 'entitled', at: now() }); await capture(store.get(row.id)); }
+        catch { await releaseOrder(row, 'game_step_failed'); }
+      } else if ((row.status === 'entitling' || row.status === 'new') && age >= REENTITLE_UNTIL_MS) store.put(row.id, { ...row, status: 'needs_review', reason: 'stuck_before_game_step' });
     }
     const rows = store.all();
     return { dead: rows.filter((r) => r.status === 'dead_letter').length, review: rows.filter((r) => r.status === 'needs_review').length };

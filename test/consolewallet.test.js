@@ -133,16 +133,24 @@ test('W9: a capture that failed on the network is retried by the job and then co
   assert.equal((await w.balance('o@x.com')).balance, 2400);
 });
 
-test('W10: crash after the game step: the row is entitled, the job captures it; a row stuck before the game step goes to the owner', async () => {
-  const { s, w, side } = await world();
+test('W10: crash after the game step: the job repeats the idempotent step and captures; a row stuck too long goes to the owner', async () => {
+  const granted = new Set();
+  const { s, w, side, calls } = await world(async (a) => { granted.add(a.orderRef); });
   await fund(w, side);
   const hold = await s.api.post('/v1/spend/reserve_item', { email: 'o@x.com', product: 'tambola', item: 'game_standard', order_ref: 'tambola-crash' });
   w.store.put('c1', { id: 'c1', orderRef: 'tambola-crash', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k', status: 'entitled', tries: 0, holdId: hold.body.hold_id, credits: 1000, at: s.clock.t });
+  const hold2 = await s.api.post('/v1/spend/reserve_item', { email: 'o@x.com', product: 'tambola', item: 'game_standard', order_ref: 'tambola-crash2' });
+  w.store.put('c3', { id: 'c3', orderRef: 'tambola-crash2', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k3', status: 'entitling', tries: 0, holdId: hold2.body.hold_id, credits: 1000, at: s.clock.t });
   w.store.put('c2', { id: 'c2', orderRef: 'tambola-x', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k2', status: 'entitling', tries: 0, holdId: 'h', credits: 1000, at: s.clock.t - 30 * MIN });
+  s.clock.t += 3 * MIN;
   const out = await w.retryStuck();
   assert.equal(w.store.get('c1').status, 'captured');
+  assert.equal(w.store.get('c3').status, 'captured');
+  assert.equal(calls.length, 1); // c3 only: the step is repeated once, by orderRef
+  assert.ok(granted.has('tambola-crash2'));
   assert.equal(w.store.get('c2').status, 'needs_review');
   assert.equal(out.review, 1);
+  assert.equal((await w.balance('o@x.com')).balance, 3400 - 2000);
 });
 
 test('W11: a network failure on reserve is never guessed: the order goes to review', async () => {
@@ -168,14 +176,41 @@ test('W12: a failed release is kept and retried by the job', async () => {
   assert.equal((await w.balance('o@x.com')).balance, 3400);
 });
 
-test('W13: two clicks at once with different keys cannot spend the same credits twice', async () => {
+test('W13: concurrent clicks cannot spend the same credits twice (3,400 credits, 1,700 each: exactly 2 succeed)', async () => {
+  const { s, w, side, calls } = await world();
+  await s.admin.put('/v1/admin/catalogue', { product: 'tambola', item: 'game_big', credits: 1700 });
+  await fund(w, side);
+  const res = await Promise.all([1, 2, 3, 4].map((n) => spend(w, { item: 'game_big', spendKey: `k${n}` })));
+  assert.equal(res.filter((x) => x.ok).length, 2);
+  assert.equal(calls.length, 2);
+  assert.equal((await w.balance('o@x.com')).balance, 0);
+  assert.equal(await holdsOpen(s), 0);
+});
+
+test('W13b: the same key at once gives one order; a key used by someone else or for another item is refused', async () => {
   const { w, side, calls } = await world();
-  await fund(w, side); // 3400 credits, item costs 1000: both fit, so use a second item pricing the rest
-  const [a, b, c, d] = await Promise.all([1, 2, 3, 4].map((n) => spend(w, { spendKey: `k${n}` })));
-  const ok = [a, b, c, d].filter((x) => x.ok).length;
-  assert.equal(calls.length, ok);
-  assert.equal((await w.balance('o@x.com')).balance, 3400 - 1000 * ok);
-  assert.ok(ok <= 3);
+  await fund(w, side);
+  await fund(w, side, 'p@x.com', 'b2', 'pay_2');
+  const [a, b] = await Promise.all([spend(w, { spendKey: 'same' }), spend(w, { spendKey: 'same' })]);
+  assert.equal([a, b].filter((x) => x.ok && !x.repeat).length, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(w.store.all().length, 1);
+  assert.equal((await w.spend({ email: 'p@x.com', product: 'tambola', item: 'game_standard', spendKey: 'same' })).code, 'key_conflict');
+  assert.equal((await spend(w, { item: 'game_big', spendKey: 'same' })).code, 'key_conflict');
+  assert.equal((await w.balance('p@x.com')).balance, 3400);
+});
+
+test('W13c: a release the hold refuses (already closed) is not retried forever', async () => {
+  const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => (p === '/v1/spend/release' ? { status: 409, body: { error: { code: 'hold_already_captured' } } } : c.post(p, b)) });
+  const { w, side } = await world(async () => { throw new Error('down'); }, wrap);
+  await fund(w, side);
+  await spend(w);
+  assert.equal(w.store.all()[0].status, 'needs_review');
+});
+
+test('W13d: only listed packs can be bought in rupees', async () => {
+  const { w } = await world();
+  assert.equal((await w.startBuy({ email: 'o@x.com', credits: 1234, currency: 'INR', buyId: 'b9' })).code, 'not_a_pack');
 });
 
 test('W14: bad ids and amounts are refused before any call; the wallet has no payment method', async () => {
