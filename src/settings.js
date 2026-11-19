@@ -16,6 +16,7 @@ export const SCHEMA = {
   display_currency: { type: 'curnull', def: null, doc: 'Optional third currency shown next to prices for information only (for example EUR). Never charged.' },
   fx_margin_bps: { type: 'int', def: 500, min: 0, max: 2000, doc: 'Margin added to the daily INR rate for this tenant, in basis points (500 = 5%).' },
   fx_max_age_hours: { type: 'int', def: 72, min: 1, max: 720, doc: 'How old the last good exchange rate may be before new INR orders are paused.' },
+  inr_packs: { type: 'packs', def: {}, doc: 'Fixed INR list price per credit pack, as {"credits": paise}, for example {"3400": 239900}. A pack is charged exactly this: no margin and no daily-rate change. Other sizes still use the daily rate.' },
   inr_round_to_rupee: { type: 'bool', def: 1, doc: 'Round INR prices for credit orders up to a whole rupee.' },
   buy_min_credits: { type: 'int', def: 100, min: 1, max: 100000000, doc: 'Smallest credit order (100 = US$1).' },
   buy_max_credits: { type: 'int', def: 500000, min: 1, max: 1000000000, doc: 'Largest single credit order (500000 = US$5,000).' },
@@ -141,6 +142,12 @@ export function validate(key, value) {
     case 'color':
       if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) throw bad('colour like #0b6b57');
       return value;
+    case 'packs': {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw bad('an object like {"3400": 239900}');
+      const ks = Object.keys(value);
+      if (ks.length > 50 || !ks.every((k) => /^[1-9][0-9]{0,9}$/.test(k) && Number.isSafeInteger(value[k]) && value[k] >= 100 && value[k] <= 100000000000)) throw bad('up to 50 packs: whole credits and a price in paise (at least 100)');
+      return value;
+    }
     case 'domains':
       if (!Array.isArray(value) || value.length > 500 || !value.every((d) => typeof d === 'string' && /^[a-z0-9.-]{3,100}$/.test(d))) throw bad('list of lower-case domains');
       return value;
@@ -190,6 +197,11 @@ export function creditsFromMinor(s, cur, minor) {
 /** Money value of credits, rounded in the person's favour. */
 export function minorFromCredits(s, cur, credits) {
   return Math.ceil((credits * minorPerUsd(s, cur)) / s.credits_per_usd);
+}
+/** Fixed INR list price (paise) of a listed pack, or null when the size is not a pack. */
+export function packPrice(s, credits) {
+  const p = s.inr_packs && Object.hasOwn(s.inr_packs, String(credits)) ? s.inr_packs[String(credits)] : null;
+  return Number.isSafeInteger(p) && p > 0 ? p : null;
 }
 export function fmtUsd(s, credits) {
   return (credits / s.credits_per_usd).toFixed(2);

@@ -154,7 +154,7 @@ export async function claimPaymentRef(ctx, refId, kind) {
 
 // ---------- credit in: purchase ----------
 /** Bought credits, only against a verified real payment (payment_ref is the IT Services / Razorpay payment id). */
-export async function creditPurchase(ctx, b, { lock = null } = {}) {
+export async function creditPurchase(ctx, b, { lock = null, fixedPrice = false } = {}) {
   let s = await getSettings(ctx);
   if (!lock && b.currency === 'INR' && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly.');
   if (lock) s = { ...s, credits_per_usd: lock.rateCpu, inr_paise_per_usd: lock.rateInr }; // an order keeps the rate it was made at
@@ -163,7 +163,7 @@ export async function creditPurchase(ctx, b, { lock = null } = {}) {
   const currency = b.currency;
   const payRef = payId(b.payment_ref);
   if (await ctx.db.first('SELECT 1 x FROM charged_back WHERE tenant_id = ? AND payment_ref = ?', ctx.tenantId, payRef)) throw new ApiError(409, 'payment_reversed', 'That payment was taken back.');
-  if (creditsFromMinor(s, currency, paidMinor) < amount) throw new ApiError(422, 'amount_exceeds_payment', 'More credits than the payment covers.');
+  if (!fixedPrice && creditsFromMinor(s, currency, paidMinor) < amount) throw new ApiError(422, 'amount_exceeds_payment', 'More credits than the payment covers.');
   // A paused account may still be credited: the money has already been taken, so the credits must exist.
   const noted = await ctx.db.first('SELECT payer_canon, paid_minor, currency FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef);
   if (noted && (noted.currency !== currency || paidMinor > noted.paid_minor)) throw new ApiError(409, 'payment_conflict', 'That payment was noted with different figures.');

@@ -3,7 +3,7 @@
 // rail (IT Services) through a pluggable adapter. Rail calls wait in an outbox, are retried, and end
 // up as dead letters a person can requeue. Phase 0 ships only the stub rail.
 import { ApiError, MIN, newId, int, ref, isUniqueError } from './util.js';
-import { getSettings, minorFromCredits, creditsFromMinor, fmtUsd, fmtCredits, displayText } from './settings.js';
+import { getSettings, minorFromCredits, creditsFromMinor, fmtUsd, fmtCredits, displayText, packPrice } from './settings.js';
 import { findAccount, ensureAccount } from './accounts.js';
 import { creditPurchase, payId } from './wallet.js';
 import { displayRate, currentRate } from './fx.js';
@@ -48,6 +48,7 @@ const roundInr = (s, minor) => (s.inr_round_to_rupee ? Math.ceil(minor / 100) * 
 
 /** Cash price of some credits in INR or USD, rounded in our disfavour never: always enough to cover the credits. */
 export function priceMinor(s, cur, credits) {
+  if (cur === 'INR') { const fixed = packPrice(s, credits); if (fixed != null) return fixed; } // a listed pack costs exactly its list price
   const raw = minorFromCredits(s, cur, credits);
   return cur === 'INR' ? roundInr(s, raw) : raw;
 }
@@ -62,7 +63,8 @@ export async function quote(ctx, credits, currency = null) {
     currency_name: s.currency_name,
     usd: fmtUsd(s, credits),
     usd_minor: minorFromCredits(s, 'USD', credits),
-    inr_minor: s.fx_state === 'stale' ? null : priceMinor(s, 'INR', credits), // no price without a usable rate
+    inr_fixed: packPrice(s, credits) != null,
+    inr_minor: s.fx_state === 'stale' && packPrice(s, credits) == null ? null : priceMinor(s, 'INR', credits), // no price without a usable rate
     pay_in: ['INR', 'USD'],
     base_currency: s.base_currency,
     rate_state: s.fx_state, // fresh, fallback, stale, or none (hand-set rate)
@@ -89,7 +91,8 @@ export async function buyCredits(ctx, b) {
   const credits = int(b.credits, 'credits', { min: s.buy_min_credits, max: s.buy_max_credits });
   const cur = b.currency ?? s.base_currency;
   if (cur !== 'INR' && cur !== 'USD') throw new ApiError(400, 'bad_currency', 'Payment is in INR or USD only.');
-  if (cur === 'INR' && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly or pay in USD.');
+  const fixed = cur === 'INR' && packPrice(s, credits) != null;
+  if (cur === 'INR' && !fixed && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly or pay in USD.');
   const amount = priceMinor(s, cur, credits);
 
   const prior = await ctx.db.first('SELECT * FROM purchase_order WHERE tenant_id = ? AND order_ref = ?', ctx.tenantId, orderRef);
@@ -105,8 +108,8 @@ export async function buyCredits(ctx, b) {
   const id = newId('ord');
   const now = ctx.now();
   await ctx.db.run(
-    "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'pending_rail',?,?)",
-    id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, now + s.rate_lock_minutes * MIN, s.credits_per_usd, s.inr_paise_per_usd, now, now,
+    "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, fixed_price, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending_rail',?,?)",
+    id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, now + s.rate_lock_minutes * MIN, s.credits_per_usd, s.inr_paise_per_usd, fixed ? 1 : 0, now, now,
   );
   await ctx.db.run('INSERT INTO rail_outbox (id, tenant_id, order_id, next_at, created_at) VALUES (?,?,?,?,?)', newId('rob'), ctx.tenantId, id, now, now);
   await processRail(ctx, ctx.rail, { orderId: id });
@@ -173,10 +176,10 @@ export async function requeueDeadLetter(ctx, b) {
   const s = await getSettings(ctx);
   await ctx.db.run("UPDATE rail_outbox SET status = 'pending', attempts = 0, next_at = ?, last_error = NULL WHERE id = ?", ctx.now(), id);
   // a fresh start: a new rate lock window and a new unpaid-order clock
-  const ord = await ctx.db.first('SELECT credits, currency FROM purchase_order WHERE id = ?', j.order_id);
-  if (ord && ord.currency === 'INR' && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly.');
+  const ord = await ctx.db.first('SELECT credits, currency, fixed_price FROM purchase_order WHERE id = ?', j.order_id);
+  if (ord && ord.currency === 'INR' && s.fx_state === 'stale' && !ord.fixed_price) throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly.');
   // re-quoted at today's rate: an order that waited out an outage is not paid at an old price
-  if (ord) await ctx.db.run("UPDATE purchase_order SET amount_minor = ?, rate_cpu = ?, rate_inr = ? WHERE id = ? AND status = 'failed' AND rail_order_id IS NULL", priceMinor(s, ord.currency, ord.credits), s.credits_per_usd, s.inr_paise_per_usd, j.order_id);
+  if (ord && !ord.fixed_price) await ctx.db.run("UPDATE purchase_order SET amount_minor = ?, rate_cpu = ?, rate_inr = ? WHERE id = ? AND status = 'failed' AND rail_order_id IS NULL", priceMinor(s, ord.currency, ord.credits), s.credits_per_usd, s.inr_paise_per_usd, j.order_id);
   await ctx.db.run("UPDATE purchase_order SET status = 'pending_rail', created_at = ?, lock_until = ?, updated_at = ? WHERE id = ? AND status = 'failed' AND rail_order_id IS NULL", ctx.now(), ctx.now() + s.rate_lock_minutes * MIN, ctx.now(), j.order_id);
   await audit(ctx, 'rail.requeue', { id, order_id: j.order_id });
   return { id, status: 'pending' };
@@ -206,9 +209,9 @@ export async function railConfirm(ctx, b) {
   // (the money is in, so it is never refused); it can never buy more credits than the money is worth at that rate.
   const s = await getSettings(ctx);
   const late = ctx.now() > o.lock_until; // fixed when the order was made; changing the setting later does not re-price open orders
-  const repriced = late && o.currency === 'INR' && s.fx_state !== 'stale'; // with no usable rate the order's own terms apply
+  const repriced = late && o.currency === 'INR' && s.fx_state !== 'stale' && !o.fixed_price; // a fixed-price pack is never re-priced // with no usable rate the order's own terms apply
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
-  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr } });
+  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr }, fixedPrice: !!o.fixed_price }); // the order check above already proved paid >= the fixed price
   await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);
   // More money than the order asked for: credits are given for the order only. The extra is flagged so the payment side can refund it.
   const overpaid = !repriced && paid > o.amount_minor ? paid - o.amount_minor : 0;

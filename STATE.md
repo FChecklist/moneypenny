@@ -48,3 +48,6 @@ Rail call inside the transaction in `buy_credits`; no cron or webhook sender; fi
 2. Tell the API Hub builder (local_d1354695) the contract is stable.
 3. On the owner's direct go-ahead: secret scan, then steps 4-8.
 4. Separate modules (own sessions, API-only): organizer feedback box, and the "Moneypenny" assistant (original illustrated character, not a film likeness; ask-only AI key).
+
+## Change after the audited deploy (19 Nov 2026, NOT deployed)
+F1 fix: setting `inr_packs` gives a listed INR pack a fixed price (no margin, no daily-rate change); `purchase_order.fixed_price` (migration 0004) stops a late payment being re-priced. Code differs from the audited 65b86c8: needs two fresh independent PASSes before any redeploy.

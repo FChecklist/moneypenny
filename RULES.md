@@ -1,10 +1,3 @@
-# Rules
-
-Every rule is a setting or a database row, per tenant. Nothing below is fixed in code.
-Change them with `PUT /v1/admin/settings` or the local admin page. Every change is audited.
-
-## Settings (generated from the code schema by `npm run rules-doc`)
-
 | Setting | Starting value | Meaning |
 |---|---|---|
 | `product_name` | `"Corporate Moneypenny"` | Public product name shown to people. |
@@ -18,6 +11,7 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `display_currency` | `null` | Optional third currency shown next to prices for information only (for example EUR). Never charged. |
 | `fx_margin_bps` | `500` | Margin added to the daily INR rate for this tenant, in basis points (500 = 5%). |
 | `fx_max_age_hours` | `72` | How old the last good exchange rate may be before new INR orders are paused. |
+| `inr_packs` | `{}` | Fixed INR list price per credit pack, as {"credits": paise}, for example {"3400": 239900}. A pack is charged exactly this: no margin and no daily-rate change. Other sizes still use the daily rate. |
 | `inr_round_to_rupee` | `1` | Round INR prices for credit orders up to a whole rupee. |
 | `buy_min_credits` | `100` | Smallest credit order (100 = US$1). |
 | `buy_max_credits` | `500000` | Largest single credit order (500000 = US$5,000). |
@@ -62,34 +56,3 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `theme_enabled` | `1` | Show the theme skin. Balances are identical with it off. |
 | `theme_name` | `"classic"` | Theme pack name. |
 | `theme_accent` | `"#0b6b57"` | Accent colour for the balance widget. |
-
-## Earning rules (`/v1/admin/rules`)
-
-| Field | Meaning |
-|---|---|
-| `event_type` | the event name a product sends (letters, digits, underscore) |
-| `bucket` | `bonus` or `commission` (`bought` only comes from a verified payment) |
-| `amount_type` / `amount` | `fixed` credits, or `pct_cash_bps` (commission as basis points of **cash received**; 1000 = 10%) |
-| `mode` | `once` per person, `capped` (needs `max_count`), or `every` (a bonus rule then needs a `lifetime_cap`) |
-| `lifetime_cap` | most credits this rule can ever give one person |
-| `expiry_days` | overrides the bucket's end date for this rule |
-| `enabled` | off = pays nothing |
-
-## Guards that stay in code (they protect money)
-
-- Event names that look like plain browsing (containing visit, view, login, click, browse, scroll, open, impression) never earn credit: rule creation is refused and events are ignored. This is a name test; products must not send real actions under those names.
-- Commission can only be a percent of cash received (a fixed-amount commission rule is refused and ignored). No cash, no commission. A referrer who is also the payer (after removing gmail dots and `+tags`) is refused.
-- People are matched by a cleaned-up e-mail for abuse checks, so `a.b@gmail.com` and `ab+2@gmail.com` share one welcome bonus and one lifetime cap.
-- Bought credit is never cashable; bonus and commission never come back as refund money.
-- Spend order is bonus, then commission, then bought. Commission can be spent only after its hold.
-- Rounding favours the person: credit value rounds up, and a sub-credit remainder on a fully covered order is waived.
-- Bonus is unlocked by real paid value on record, net of refunds and chargebacks.
-- Credits per US$1 cannot change once credits exist; the INR rate moves at most 10% per change.
-- One real-payment id works once per tenant, across purchases, order cash and payouts.
-- A chargeback removes everything that came from that payment, including credits held in orders or returned from orders.
-- E-mails are plain ASCII with no trailing dots; throw-away domains are blocked including their sub-domains.
-- Commission needs the sale's real payment id (`sale_ref`); one sale pays once per tenant; per-sale and per-day commission caps are settings. A charged-back sale removes its commission.
-- A conversion handed to a payment rail cannot be rejected; only a person marking it paid closes it.
-- Orders keep the exchange rate they were made at (credit orders and holds). A stale rate pauses new INR cash and INR credit orders only.
-- Webhook addresses: https only, public host names only (no IP numbers, no user info, no internal or wildcard-DNS names). The real sender must also check the resolved IP address.
-- Idempotency keys starting `pay:` are reserved for payment ids.
