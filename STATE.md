@@ -33,7 +33,7 @@
 A second independent PASS on the exact final code is still needed before reporting done.
 
 ## What is deployed
-Nothing. No GitHub repo, no push, no Cloudflare resources, no DNS, no live D1/Razorpay/IT Services. No rollback id exists yet.
+LIVE (19 Nov 2026): https://moneypenny.corporatetambola.com, Worker `moneypenny`, SQLite Durable Object, code 65b86c8. Public repo FChecklist/moneypenny. Rollback ids: previous version 8f26e747-dfa9-4251-928f-5fa17f1701e5 (no secret); current 5d8ac727-536d-4174-9fa3-52fe6dd96b06 (adds MNP_MASTER_SECRET). Master secret and tenant keys are in C:/Users/Dell/.moneypenny (outside the repo). Live smoke passed incl. rollback on a throw on the real runtime; one test purchase (1000 test credits, smoke@example.com) is in the live ledger. Purchase and AI keys were revoked after the smoke: issue new ones with the signed setup call when the payment side exists. INR is refused until an owner sets a rate. MNP_STATUS_OPTIONAL=1 is on until the Hub status URL is set.
 
 ## What waits on whom
 - Steps 4-8 (public repo FChecklist/moneypenny after a secret scan, push, Cloudflare deploy, DNS Moneypenny.corporatetambola.com, live smoke, register code MNP) wait for the owner to confirm directly in the Moneypenny session. Relayed quotes through BOSS were not accepted as that confirmation.
