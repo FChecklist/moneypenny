@@ -139,7 +139,11 @@ export async function reserveItem(ctx, b) {
   const need = cat.credits;
   const acc = await findAccount(ctx, b.email);
   if (acc && acc.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
-  const open = await ctx.db.first("SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'held'", ctx.tenantId, orderRef);
+  const open = await ctx.db.first("SELECT id, account_id, credits, product, item, expires_at FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'held'", ctx.tenantId, orderRef);
+  // A repeat of the same reserve (same person, same item) gets the same hold back: a lost answer can always be recovered.
+  if (open && acc && open.account_id === acc.id && open.product === product && open.item === item && ctx.now() <= open.expires_at) {
+    return { hold_id: open.id, credits: open.credits, product, item, expires_at: open.expires_at, repeat: true };
+  }
   if (open) throw new ApiError(409, 'order_has_open_hold', 'This order already has a hold. Capture or release it first.');
   const done = await ctx.db.first("SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'captured'", ctx.tenantId, orderRef);
   if (done) throw new ApiError(409, 'order_already_paid_with_credits', 'This order was already completed.');

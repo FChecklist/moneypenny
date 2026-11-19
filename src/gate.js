@@ -117,7 +117,7 @@ export async function buyCredits(ctx, b) {
 }
 
 const orderView = (o) => ({
-  order_id: o.id, order_ref: o.order_ref, status: o.status, credits: o.credits, currency: o.currency, amount_minor: o.amount_minor,
+  order_id: o.id, order_ref: o.order_ref, status: o.status, credits: o.credits, currency: o.currency, amount_minor: o.amount_minor, fixed_price: !!o.fixed_price,
   pay_url: o.pay_url ?? null, rail_order_id: o.rail_order_id ?? null,
 });
 
