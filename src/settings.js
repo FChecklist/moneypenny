@@ -146,6 +146,8 @@ export function validate(key, value) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw bad('an object like {"3400": 239900}');
       const ks = Object.keys(value);
       if (ks.length > 50 || !ks.every((k) => /^[1-9][0-9]{0,9}$/.test(k) && Number.isSafeInteger(value[k]) && value[k] >= 100 && value[k] <= 100000000000)) throw bad('up to 50 packs: whole credits and a price in paise (at least 100)');
+      // a typing slip cannot make credits nearly free: each credit must cost between 40 and 160 paise (Rs 0.40 to Rs 1.60; 100 credits = US$1)
+      if (!ks.every((k) => value[k] >= Number(k) * 40 && value[k] <= Number(k) * 160)) throw bad('each credit must cost between 40 and 160 paise');
       return value;
     }
     case 'domains':

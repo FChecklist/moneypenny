@@ -64,3 +64,25 @@ test('F1-4: bad pack tables are refused', async () => {
     assert.equal((await s.admin.put('/v1/admin/settings', { inr_packs: bad })).status, 400);
   }
 });
+
+test('F1-5: a pack price far from a normal price is refused (typing slip)', async () => {
+  const s = await setup();
+  for (const bad of [{ 3400: 239 }, { 3400: 23990 }, { 3400: 2399000 }]) assert.equal((await s.admin.put('/v1/admin/settings', { inr_packs: bad })).status, 400);
+  assert.equal((await s.admin.put('/v1/admin/settings', { inr_packs: PACK })).status, 200);
+});
+
+test('F1-6: an underpaid fixed order is refused; a pack changed after the order keeps the price quoted', async () => {
+  const s = await setup();
+  await s.admin.put('/v1/admin/settings', { inr_packs: PACK });
+  await refreshRates(s.db, src(70), DAY0);
+  s.clock.t = DAY0 + 3 * MIN;
+  await order(s, 'chg');
+  const o = await s.db.first("SELECT id FROM purchase_order WHERE order_ref = 'chg'");
+  await s.admin.put('/v1/admin/settings', { inr_packs: { 3400: 259900 } }); // list price changed after the order
+  const low = await s.pay.post('/v1/rail/confirm', { order_id: o.id, payment_ref: 'pay_low', paid_minor: 200000, currency: 'INR' });
+  assert.equal(low.status, 422);
+  const ok = await s.pay.post('/v1/rail/confirm', { order_id: o.id, payment_ref: 'pay_ok', paid_minor: 239900, currency: 'INR' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.credited, 3400);
+  assert.equal((await order(s, 'chg2')).body.amount_minor, 259900); // new orders use the new price
+});
