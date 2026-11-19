@@ -44,7 +44,7 @@ test('W2: underpay, wrong currency and overpay: no extra credits, exact codes', 
   const b = await w.startBuy({ email: 'o@x.com', credits: 3400, currency: 'INR', buyId: 'b1' });
   const low = await side.paymentVerified({ orderId: b.orderId, paymentRef: 'pay_x', paidMinor: 100, currency: 'INR' });
   assert.equal(low.ok, false);
-  assert.ok(low.code && low.code !== 'confirm_failed', JSON.stringify(low));
+  assert.equal(low.code, 'payment_mismatch');
   const usd = await side.paymentVerified({ orderId: b.orderId, paymentRef: 'pay_y', paidMinor: 239900, currency: 'USD' });
   assert.equal(usd.ok, false);
   assert.equal((await w.balance('o@x.com')).balance, 0);
@@ -138,10 +138,10 @@ test('W10: crash after the game step: the job repeats the idempotent step and ca
   const { s, w, side, calls } = await world(async (a) => { granted.add(a.orderRef); });
   await fund(w, side);
   const hold = await s.api.post('/v1/spend/reserve_item', { email: 'o@x.com', product: 'tambola', item: 'game_standard', order_ref: 'tambola-crash' });
-  w.store.put('c1', { id: 'c1', orderRef: 'tambola-crash', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k', status: 'entitled', tries: 0, holdId: hold.body.hold_id, credits: 1000, at: s.clock.t });
+  w.store.plant('c1', { id: 'c1', orderRef: 'tambola-crash', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k', status: 'entitled', tries: 0, holdId: hold.body.hold_id, credits: 1000, at: s.clock.t });
   const hold2 = await s.api.post('/v1/spend/reserve_item', { email: 'o@x.com', product: 'tambola', item: 'game_standard', order_ref: 'tambola-crash2' });
-  w.store.put('c3', { id: 'c3', orderRef: 'tambola-crash2', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k3', status: 'entitling', tries: 0, holdId: hold2.body.hold_id, credits: 1000, at: s.clock.t });
-  w.store.put('c2', { id: 'c2', orderRef: 'tambola-x', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k2', status: 'entitling', tries: 0, holdId: 'h', credits: 1000, at: s.clock.t - 30 * MIN });
+  w.store.plant('c3', { id: 'c3', orderRef: 'tambola-crash2', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k3', status: 'entitling', tries: 0, holdId: hold2.body.hold_id, credits: 1000, at: s.clock.t });
+  w.store.plant('c2', { id: 'c2', orderRef: 'tambola-x', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'k2', status: 'entitling', tries: 0, holdId: 'h', credits: 1000, at: s.clock.t - 30 * MIN });
   s.clock.t += 3 * MIN;
   const out = await w.retryStuck();
   assert.equal(w.store.get('c1').status, 'captured');
@@ -195,9 +195,36 @@ test('W13b: the same key at once gives one order; a key used by someone else or 
   assert.equal([a, b].filter((x) => x.ok && !x.repeat).length, 1);
   assert.equal(calls.length, 1);
   assert.equal(w.store.all().length, 1);
-  assert.equal((await w.spend({ email: 'p@x.com', product: 'tambola', item: 'game_standard', spendKey: 'same' })).code, 'key_conflict');
+  const other = await w.spend({ email: 'p@x.com', product: 'tambola', item: 'game_standard', spendKey: 'same' }); // keys are per person: no squatting
+  assert.equal(other.ok, true);
+  assert.equal(other.repeat, undefined);
   assert.equal((await spend(w, { item: 'game_big', spendKey: 'same' })).code, 'key_conflict');
-  assert.equal((await w.balance('p@x.com')).balance, 3400);
+  assert.equal((await w.balance('p@x.com')).balance, 2400);
+});
+
+test('W13e: two job runs at once: the crashed game step is repeated once and captured once; nothing is overwritten', async () => {
+  const { s, w, side, calls } = await world();
+  await fund(w, side);
+  const hold = await s.api.post('/v1/spend/reserve_item', { email: 'o@x.com', product: 'tambola', item: 'game_standard', order_ref: 'tambola-dup' });
+  w.store.plant('d1', { id: 'd1', orderRef: 'tambola-dup', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'x', status: 'entitling', tries: 0, holdId: hold.body.hold_id, credits: 1000, at: s.clock.t });
+  s.clock.t += 3 * MIN;
+  await Promise.all([w.retryStuck(), w.retryStuck(), w.retryStuck()]);
+  assert.equal(calls.length, 1);
+  assert.equal(w.store.get('d1').status, 'captured');
+  assert.equal((await w.balance('o@x.com')).balance, 2400);
+  await w.retryStuck();
+  assert.equal(w.store.get('d1').status, 'captured');
+});
+
+test('W13f: a late release cannot overwrite an order that was captured meanwhile', async () => {
+  const { s, w, side } = await world();
+  await fund(w, side);
+  const r = await spend(w);
+  assert.equal(r.ok, true);
+  const id = w.store.all()[0].id;
+  const late = await w.retryStuck();
+  assert.equal(late.dead, 0);
+  assert.equal(w.store.get(id).status, 'captured');
 });
 
 test('W13c: a release the hold refuses (already closed) is not retried forever', async () => {
@@ -208,8 +235,14 @@ test('W13c: a release the hold refuses (already closed) is not retried forever',
   assert.equal(w.store.all()[0].status, 'needs_review');
 });
 
-test('W13d: only listed packs can be bought in rupees', async () => {
+test('W13d: only listed packs, only in rupees, and an order id nobody else can take', async () => {
   const { w } = await world();
+  assert.equal((await w.startBuy({ email: 'o@x.com', credits: 3400, currency: 'USD', buyId: 'b9' })).code, 'currency_not_offered');
+  const a = await w.startBuy({ email: 'o@x.com', credits: 3400, buyId: 'same' });
+  const b = await w.startBuy({ email: 'p@x.com', credits: 3400, buyId: 'same' });
+  assert.equal(a.ok, true);
+  assert.equal(b.ok, true);
+  assert.notEqual(a.orderId, b.orderId);
   assert.equal((await w.startBuy({ email: 'o@x.com', credits: 1234, currency: 'INR', buyId: 'b9' })).code, 'not_a_pack');
 });
 
