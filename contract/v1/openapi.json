@@ -298,7 +298,7 @@
     },
     "price_changed": {
       "status": 409,
-      "meaning": "The price has changed."
+      "meaning": "The pack price has changed. Start a new order."
     },
     "purchase_expired": {
       "status": 409,
