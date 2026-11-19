@@ -159,7 +159,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
       return 'stop';
     }
     if (r.status !== 200) { await move(row.id, ['reserving'], { status: 'refused', reason: code(r) ?? 'reserve_failed', http: r.status }); return 'stop'; }
-    await move(row.id, ['reserving'], { status: 'reserved', holdId: r.body.hold_id, credits: r.body.credits });
+    await move(row.id, ['reserving'], { status: 'reserved', holdId: r.body.hold_id, credits: r.body.credits, tries: 0 });
     return 'go';
   }
 
@@ -167,7 +167,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     if (!await move(row.id, ['reserved'], { status: 'capturing' })) return 'stop';
     let c;
     try { c = await mnp.post('/v1/spend/capture', { hold_id: row.holdId }); } catch { c = null; }
-    if (c && (c.status === 200 || code(c) === 'hold_already_captured')) { await move(row.id, ['capturing'], { status: 'captured', capturedAt: now() }); return 'go'; }
+    if (c && (c.status === 200 || code(c) === 'hold_already_captured')) { await move(row.id, ['capturing'], { status: 'captured', capturedAt: now(), tries: 0 }); return 'go'; }
     const tries = (await bump(row.id));
     // The hold lapsed or vanished before capture: nothing was given yet, so go back and reserve again (same order id).
     const lapsed = c && (c.status === 410 || c.status === 404 || code(c) === 'hold_closed');
