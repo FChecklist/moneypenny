@@ -106,7 +106,10 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     if (again) {
       if (again.product !== product || again.item !== item) return fail('key_conflict', 409);
       // a click refused only for lack of credits may be tried again with the same key after the person buys credits
-      if (again.status === 'refused' && again.reason === 'insufficient_credits' && await store.cas(again.id, ['refused'], { status: 'new', at: now(), tries: 0 })) return answer(await run(again.id));
+      if (again.status === 'refused' && again.reason === 'insufficient_credits') {
+        if (await store.cas(again.id, ['refused'], { status: 'new', at: now(), tries: 0 })) return answer(await run(again.id));
+        return answer(await store.get(again.id), true); // lost the race: answer from the current row
+      }
       return answer(again, true);
     }
     return answer(await run(id));
@@ -210,7 +213,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     return { review: rows.filter((r) => r.status === 'needs_review').length, open: rows.filter((r) => READY.includes(r.status) || r.status in WORK).length };
   }
 
-  return { quote, startBuy, balance, spend, retryStuck, store };
+  return { quote, startBuy, balance, spend, retryStuck }; // the store is deliberately not exposed: organizer code must not be able to edit orders
 }
 
 /** Built only in the IT Services webhook handler, after the Razorpay signature is checked there. */

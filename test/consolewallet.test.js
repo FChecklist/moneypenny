@@ -22,7 +22,9 @@ async function world(behave = () => {}, wrap = (c) => c, opts = {}) {
   let calls = 0;
   const game = { entitle: async (a) => { calls += 1; await behave(calls, a, s); granted.add(a.orderRef); } };
   const alerts = [];
-  const w = createWallet({ mnp: wrap(s.api), now: () => s.clock.t, alert: (r) => alerts.push(r.reason), games: { tambola: game }, ...opts });
+  const store = opts.store ?? memoryStore();
+  const w = createWallet({ mnp: wrap(s.api), now: () => s.clock.t, alert: (r) => alerts.push(r.reason), games: { tambola: game }, ...opts, store });
+  w.store = store; // the test keeps its own handle; the wallet does not expose the store
   const side = createPaymentSide({ pay: s.pay });
   return { s, w, side, granted, alerts, calls: () => calls };
 }
@@ -336,4 +338,22 @@ test('P1: a pack order made at an old price is not handed out again after a pric
 test('P2: the console key cannot confirm a payment (only the payment side can)', async () => {
   const { s } = await world();
   assert.equal((await s.api.post('/v1/rail/confirm', { order_id: 'x', payment_ref: 'p', paid_minor: 1, currency: 'INR' })).status, 403);
+});
+
+test('S15: capture keeps failing: after 5 tries the order goes to the owner with the reason; no game call', async () => {
+  const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { if (p === '/v1/spend/capture') throw new Error('net'); return c.post(p, b); } });
+  const { s, w, side, alerts, calls } = await world(() => {}, wrap);
+  await fund(w, side);
+  await spend(w);
+  for (let i = 0; i < 8; i++) { s.clock.t += 3 * MIN; await w.retryStuck(); }
+  assert.equal(onlyRow(w).status, 'needs_review');
+  assert.deepEqual(alerts, ['capture_failed']);
+  assert.equal(calls(), 0);
+});
+
+test('S16: the wallet does not hand out its store', async () => {
+  const { w } = await world();
+  const fresh = createWallet({ mnp: {}, games: {} });
+  assert.equal(fresh.store, undefined);
+  assert.equal(Object.keys(fresh).includes('plant'), false);
 });
