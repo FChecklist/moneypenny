@@ -108,7 +108,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
       if (again.product !== product || again.item !== item) return fail('key_conflict', 409);
       // a click refused only for lack of credits may be tried again with the same key after the person buys credits
       if (again.status === 'refused' && again.reason === 'insufficient_credits') {
-        if (await store.cas(again.id, ['refused'], { status: 'new', at: now(), tries: 0 })) return answer(await run(again.id));
+        if (await store.cas(again.id, ['refused'], { status: 'new', at: now(), createdAt: now(), tries: 0 })) return answer(await run(again.id));
         return answer(await store.get(again.id), true); // lost the race: answer from the current row
       }
       return answer(again, true);
@@ -207,7 +207,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     }
     for (const row of (await store.all())) {
       const age = now() - row.at;
-      if ((READY.includes(row.status) || row.status in WORK) && now() - (row.createdAt ?? row.at) > OPEN_TOO_LONG_MS) { await review(row.id, [row.status], 'open_too_long'); continue; }
+      if (READY.includes(row.status) && now() - (row.createdAt ?? row.at) > OPEN_TOO_LONG_MS) { await review(row.id, [row.status], 'open_too_long'); continue; }
       if ((row.status === 'captured' || row.status === 'granting') && now() - (row.capturedAt ?? row.at) > GIVE_UP_MS) await review(row.id, [row.status], 'game_step_unknown_too_long'); // credits are ours: the owner decides
       else if (READY.includes(row.status) && age > CLAIM_MS) await run(row.id);
     }

@@ -380,3 +380,13 @@ test('S18: an order that stays unfinished for any reason (here a refund that kee
   assert.equal(w.store.get('r1').status, 'needs_review');
   assert.deepEqual(alerts, ['open_too_long']);
 });
+
+test('S19: a click refused for lack of credits and repeated hours later (after buying) is not sent to the owner as "open too long"', async () => {
+  const { s, w, side, alerts } = await world();
+  assert.equal((await spend(w, { spendKey: 'late' })).code, 'insufficient_credits');
+  s.clock.t += 5 * 60 * MIN;
+  await fund(w, side);
+  assert.equal((await spend(w, { spendKey: 'late' })).ok, true);
+  await w.retryStuck();
+  assert.deepEqual(alerts, []);
+});
