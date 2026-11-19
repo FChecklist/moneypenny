@@ -1,7 +1,16 @@
-# Phase 0: NOT deployed, NOT linked to any Cloudflare account. Placeholder ids only.
+# Phase 0 deploy: free plan, SQLite Durable Object. No payment side and no rate source are connected.
 name = "moneypenny"
 main = "src/worker.js"
 compatibility_date = "2026-11-01"
+workers_dev = false
+
+[[routes]]
+pattern = "moneypenny.corporatetambola.com"
+custom_domain = true
+
+[vars]
+# Phase 0 has no money flowing (no rail), so the Hub global switch is optional for now. Set MNP_STATUS_URL and remove this before a rail is connected.
+MNP_STATUS_OPTIONAL = "1"
 
 [[durable_objects.bindings]]
 name = "MNP"

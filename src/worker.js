@@ -5,7 +5,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { unconfiguredRail } from './rail.js';
 import { createApp } from './api.js';
 import { doDb } from './do.js';
-import { migrate } from './db.js';
+import { migrateFiles as migrate } from './migrate.js';
 import { MIGRATIONS } from './migrations.gen.js';
 import { urlStatus } from './status.js';
 

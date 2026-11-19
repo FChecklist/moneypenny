@@ -26,7 +26,9 @@
 | 13 | FAIL (buy_credits made orders with no payment side, wording $ in docs, setup not behind off-switch/atomic) | fixed |
 | 14 | FAIL (refused owner setup call could be replayed; set_rate with no tenant; docs) | fixed |
 | 15 | FAIL (approving an AI request skipped the Hub per-action switch-off; API.md wrong in 3 places; wording lines allowed currency signs) | fixed |
-| 16 | pending | fresh independent auditor on the final code |
+| 16 | PASS (ccd4f24) | no real defects |
+| 17 | PASS (ccd4f24) | second PASS in a row |
+| after 17 | first real-runtime check (local workerd) found src/db.js imported Node-only modules and failed to load in a Worker; fixed by moving migrate to src/migrate.js. Rollback on throw, migrations, hash chain and signed setup verified on workerd. Re-audit of this exact code: 18, 19 | |
 
 A second independent PASS on the exact final code is still needed before reporting done.
 
