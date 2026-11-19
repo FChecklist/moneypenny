@@ -283,3 +283,33 @@ test('T1: the in-memory store keeps every promise; a broken store is caught by t
   const noUnique = () => { const m = memoryStore(); return { ...m, putNew: (id, row) => { m.plant(id, row); return null; } }; };
   assert.ok((await storeContract(noUnique)).length > 0);
 });
+
+test('T2: the wallet works with a store that answers later (async), like a real database', async () => {
+  const m = memoryStore();
+  const lag = () => new Promise((r) => setTimeout(r, 1));
+  const asyncStore = { get: async (i) => { await lag(); return m.get(i); }, all: async () => { await lag(); return m.all(); }, putNew: async (i, r) => { await lag(); return m.putNew(i, r); }, cas: async (i, f, p) => { await lag(); return m.cas(i, f, p); }, plant: m.plant };
+  assert.deepEqual(await storeContract(() => asyncStore), []);
+  const { s, w, side, calls } = await world(() => {}, (c) => c, { store: asyncStore });
+  await fund(w, side);
+  const res = await Promise.all([1, 2, 3, 4].map((n) => spend(w, { item: 'game_big', spendKey: `k${n}` })));
+  assert.equal(res.filter((x) => x.ok).length, 2);
+  assert.equal(calls(), 2);
+  assert.equal((await w.balance('o@x.com')).balance, 0);
+  await ok(s);
+});
+
+test('T3: a capture that was done on the server but looked failed is not lost: the order carries on to the grant', async () => {
+  let first = true;
+  const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { const r = await c.post(p, b); if (first && p === '/v1/spend/capture') { first = false; return { status: 409, body: { error: { code: 'hold_closed' } } }; } return r; } });
+  const { s, w, side, calls } = await world(() => {}, wrap);
+  await fund(w, side);
+  await spend(w);
+  s.clock.t += 3 * MIN;
+  await w.retryStuck();
+  s.clock.t += 3 * MIN;
+  await w.retryStuck();
+  assert.equal(onlyRow(w).status, 'granted');
+  assert.equal(calls(), 1);
+  assert.equal((await w.balance('o@x.com')).balance, 2400);
+  await ok(s);
+});

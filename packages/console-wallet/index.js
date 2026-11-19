@@ -10,8 +10,8 @@
 // `games[product].entitle({ email, item, orderRef })`: the game's own existing step, server to server.
 //   CONTRACT: all-or-nothing and idempotent by orderRef; it throws an error with `definite: true` ONLY when it is sure
 //   nothing was granted. Any other failure is treated as unknown and repeated.
-// `store`: console orders. Production: the console database with a unique spend_key and a real compare-and-set.
-//   Any adapter must pass `storeContract` (exported below).
+// `store`: console orders. Every store call may be async (it is awaited). Production: the console database with a unique
+//   spend_key and a real compare-and-set. Any adapter must pass `storeContract` (exported below).
 // RUN `retryStuck` EVERY 2 MINUTES. Money is whole credits only; this module does no division and no rounding.
 //
 // Two factories on purpose: `createWallet` is what organizer-facing routes may reach (no purchase key).
@@ -40,6 +40,9 @@ export async function storeContract(makeStore) {
   const dup = await st.putNew('b', row('b', 'k1'));
   if (!dup || dup.id !== 'a') bad.push('putNew of an existing key must return the existing row');
   if ((await st.all()).length !== 1) bad.push('a duplicate key must not insert');
+  // (the concurrent-insert check below adds one row)
+  const races = await Promise.all([1, 2, 3, 4, 5].map((n) => st.putNew(`r${n}`, row(`r${n}`, 'race'))));
+  if (races.filter((x) => x === null).length !== 1) bad.push('five concurrent putNew of one key must insert exactly once');
   const wins = (await Promise.all([1, 2, 3, 4, 5].map(() => st.cas('a', ['new'], { status: 'reserving' })))).filter(Boolean).length;
   if (wins !== 1) bad.push(`cas from the same status must have exactly one winner, got ${wins}`);
   if (await st.cas('a', ['new'], { status: 'x' })) bad.push('cas must fail when the status is not in the allowed list');
@@ -61,13 +64,13 @@ const OWNER = ['needs_review'];
 
 export function createWallet({ mnp, games = {}, store = memoryStore(), now = Date.now, currencies = ['INR'], alert = () => {} }) {
   const game = (p) => (typeof p === 'string' && Object.hasOwn(games, p) ? games[p] : null);
-  const move = (id, from, patch) => {
-    const ok = store.cas(id, from, { at: now(), ...patch });
-    if (ok && OWNER.includes(patch.status)) { try { alert({ ...store.get(id) }); } catch { /* an alert failure must not stop the flow */ } }
+  const move = async (id, from, patch) => {
+    const ok = await store.cas(id, from, { at: now(), ...patch });
+    if (ok && OWNER.includes(patch.status)) { try { alert({ ...(await store.get(id)) }); } catch { /* an alert failure must not stop the flow */ } }
     return ok;
   };
-  const bump = (id) => (store.get(id)?.tries ?? 0) + 1;
-  const review = (id, from, reason) => move(id, from, { status: 'needs_review', reason });
+  const bump = async (id) => ((await store.get(id))?.tries ?? 0) + 1;
+  const review = async (id, from, reason) => await move(id, from, { status: 'needs_review', reason });
 
   /** Prices come from Moneypenny settings (data), never from the page. */
   async function quote(credits) {
@@ -99,7 +102,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     const id = randomUUID();
     const scoped = `${short(email)}:${spendKey}`; // keys belong to one person
     const orderRef = `${product}-${short(scoped)}`; // from the click's key: a retried reserve meets the same order
-    const again = store.putNew(id, { id, orderRef, email, product, item, spendKey: scoped, status: 'new', tries: 0, at: now() });
+    const again = await store.putNew(id, { id, orderRef, email, product, item, spendKey: scoped, status: 'new', tries: 0, at: now() });
     if (again) {
       if (again.product !== product || again.item !== item) return fail('key_conflict', 409);
       return answer(again, true);
@@ -118,7 +121,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
   /** Takes one order as far as it will go right now, one claimed step at a time. */
   async function run(id) {
     for (let guard = 0; guard < 8; guard++) {
-      const row = store.get(id);
+      const row = (await store.get(id));
       if (!row) return null;
       let next;
       if (row.status === 'new') next = await stepReserve(row);
@@ -126,78 +129,82 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
       else if (row.status === 'captured') next = await stepGrant(row);
       else if (row.status === 'refund_due') next = await stepRefund(row);
       else return row;
-      if (next === 'stop') return store.get(id);
+      if (next === 'stop') return (await store.get(id));
     }
-    return store.get(id);
+    return (await store.get(id));
   }
 
   async function stepReserve(row) {
-    if (!move(row.id, ['new'], { status: 'reserving' })) return 'stop';
+    if (!await move(row.id, ['new'], { status: 'reserving' })) return 'stop';
     let r;
     try { r = await mnp.post('/v1/spend/reserve_item', { email: row.email, product: row.product, item: row.item, order_ref: row.orderRef }); } catch { r = null; }
-    if (r === null || r.status >= 500) { // unclear: reserve is idempotent, so just try again later
-      const tries = bump(row.id);
-      if (tries >= MAX_TRIES) review(row.id, ['reserving'], 'reserve_failed'); else move(row.id, ['reserving'], { status: 'new', tries });
+    if (r === null || r.status >= 500 || r.status === 429) { // unclear: reserve is idempotent, so just try again later
+      const tries = (await bump(row.id));
+      if (tries >= MAX_TRIES) await review(row.id, ['reserving'], 'reserve_failed'); else await move(row.id, ['reserving'], { status: 'new', tries });
       return 'stop';
+    }
+    if (code(r) === 'order_already_paid_with_credits') { // a hold of this order was already captured (lost answer, other worker): go on to grant
+      if (row.holdId) { await move(row.id, ['reserving'], { status: 'captured' }); return 'go'; }
+      await review(row.id, ['reserving'], 'paid_without_hold_id'); return 'stop';
     }
     if (code(r) === 'order_has_open_hold') { // an old hold of this order is still open (it lapses by itself): wait
-      const tries = bump(row.id);
-      if (tries >= MAX_TRIES) review(row.id, ['reserving'], 'hold_stuck'); else move(row.id, ['reserving'], { status: 'new', tries });
+      const tries = (await bump(row.id));
+      if (tries >= MAX_TRIES) await review(row.id, ['reserving'], 'hold_stuck'); else await move(row.id, ['reserving'], { status: 'new', tries });
       return 'stop';
     }
-    if (r.status !== 200) { move(row.id, ['reserving'], { status: 'refused', reason: code(r) ?? 'reserve_failed', http: r.status }); return 'stop'; }
-    move(row.id, ['reserving'], { status: 'reserved', holdId: r.body.hold_id, credits: r.body.credits });
+    if (r.status !== 200) { await move(row.id, ['reserving'], { status: 'refused', reason: code(r) ?? 'reserve_failed', http: r.status }); return 'stop'; }
+    await move(row.id, ['reserving'], { status: 'reserved', holdId: r.body.hold_id, credits: r.body.credits });
     return 'go';
   }
 
   async function stepCapture(row) {
-    if (!move(row.id, ['reserved'], { status: 'capturing' })) return 'stop';
+    if (!await move(row.id, ['reserved'], { status: 'capturing' })) return 'stop';
     let c;
     try { c = await mnp.post('/v1/spend/capture', { hold_id: row.holdId }); } catch { c = null; }
-    if (c && (c.status === 200 || code(c) === 'hold_already_captured')) { move(row.id, ['capturing'], { status: 'captured' }); return 'go'; }
-    const tries = bump(row.id);
+    if (c && (c.status === 200 || code(c) === 'hold_already_captured')) { await move(row.id, ['capturing'], { status: 'captured' }); return 'go'; }
+    const tries = (await bump(row.id));
     // The hold lapsed or vanished before capture: nothing was given yet, so go back and reserve again (same order id).
     const lapsed = c && (c.status === 410 || c.status === 404 || code(c) === 'hold_closed');
-    if (tries >= MAX_TRIES) review(row.id, ['capturing'], lapsed ? 'hold_lapsed' : 'capture_failed');
-    else move(row.id, ['capturing'], { status: lapsed ? 'new' : 'reserved', tries });
+    if (tries >= MAX_TRIES) await review(row.id, ['capturing'], lapsed ? 'hold_lapsed' : 'capture_failed');
+    else await move(row.id, ['capturing'], { status: lapsed ? 'new' : 'reserved', tries });
     return 'stop';
   }
 
   async function stepGrant(row) {
-    if (!move(row.id, ['captured'], { status: 'granting' })) return 'stop';
+    if (!await move(row.id, ['captured'], { status: 'granting' })) return 'stop';
     try {
       await game(row.product).entitle({ email: row.email, item: row.item, orderRef: row.orderRef });
     } catch (e) {
-      if (e?.definite === true) { move(row.id, ['granting'], { status: 'refund_due', reason: 'game_step_refused' }); return 'go'; }
-      move(row.id, ['granting'], { status: 'captured', at: row.at, tries: bump(row.id), reason: 'game_step_unknown' }); // keep `at`: it ages to the owner
+      if (e?.definite === true) { await move(row.id, ['granting'], { status: 'refund_due', reason: 'game_step_refused' }); return 'go'; }
+      await move(row.id, ['granting'], { status: 'captured', at: row.at, tries: (await bump(row.id)), reason: 'game_step_unknown' }); // keep `at`: it ages to the owner
       return 'stop';
     }
-    move(row.id, ['granting'], { status: 'granted' });
+    await move(row.id, ['granting'], { status: 'granted' });
     return 'stop';
   }
 
   async function stepRefund(row) {
-    if (!move(row.id, ['refund_due'], { status: 'refunding' })) return 'stop';
+    if (!await move(row.id, ['refund_due'], { status: 'refunding' })) return 'stop';
     let r;
     try { r = await mnp.post('/v1/refund', { type: 'order', hold_id: row.holdId }); } catch { r = null; }
-    if (r && (r.status === 200 || code(r) === 'nothing_to_return')) { move(row.id, ['refunding'], { status: 'refunded' }); return 'stop'; }
-    const tries = bump(row.id);
-    if (tries >= MAX_TRIES) review(row.id, ['refunding'], 'refund_failed'); else move(row.id, ['refunding'], { status: 'refund_due', tries });
+    if (r && (r.status === 200 || code(r) === 'nothing_to_return')) { await move(row.id, ['refunding'], { status: 'refunded' }); return 'stop'; }
+    const tries = (await bump(row.id));
+    if (tries >= MAX_TRIES) await review(row.id, ['refunding'], 'refund_failed'); else await move(row.id, ['refunding'], { status: 'refund_due', tries });
     return 'stop';
   }
 
   /** The 2-minute job. Safe to run twice at once: every step is claimed first. */
   async function retryStuck() {
-    for (const row of store.all()) {
+    for (const row of (await store.all())) {
       const age = now() - row.at;
-      if (WORK[row.status] && age > CLAIM_MS) move(row.id, [row.status], { status: WORK[row.status], at: row.at }); // a dead worker: put it back
+      if (WORK[row.status] && age > CLAIM_MS) await move(row.id, [row.status], { status: WORK[row.status], at: row.at }); // a dead worker: put it back
     }
-    for (const row of store.all()) {
+    for (const row of (await store.all())) {
       const age = now() - row.at;
-      if (row.status === 'captured' && age > GIVE_UP_MS) review(row.id, ['captured'], 'game_step_unknown_too_long'); // credits are ours: the owner decides
+      if (row.status === 'captured' && age > GIVE_UP_MS) await review(row.id, ['captured'], 'game_step_unknown_too_long'); // credits are ours: the owner decides
       else if (READY.includes(row.status) && age > CLAIM_MS) await run(row.id);
     }
-    const rows = store.all();
+    const rows = (await store.all());
     return { review: rows.filter((r) => r.status === 'needs_review').length, open: rows.filter((r) => READY.includes(r.status) || r.status in WORK).length };
   }
 
