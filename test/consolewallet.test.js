@@ -307,3 +307,14 @@ test('W19: an unclear failure that stays unclear goes to the owner, hold untouch
   assert.equal(w.store.all()[0].status, 'needs_review');
   assert.equal(out.review, 1);
 });
+
+test('W20: the owner is alerted at once when an order goes to dead letter or review', async () => {
+  const seen = [];
+  const s0 = await world(async () => { throw new Error('timeout'); });
+  const w = createWallet({ mnp: { get: (p) => s0.s.api.get(p), post: (p, b) => s0.s.api.post(p, b) }, now: () => s0.s.clock.t, alert: (row) => seen.push(row.status), games: { tambola: { entitle: async () => { throw new Error('timeout'); } } } });
+  await fund(w, createPaymentSide({ pay: s0.s.pay }));
+  await spend(w);
+  s0.s.clock.t += 13 * MIN;
+  await w.retryStuck();
+  assert.deepEqual(seen, ['needs_review']);
+});

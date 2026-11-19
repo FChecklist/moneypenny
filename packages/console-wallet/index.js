@@ -4,6 +4,7 @@
 // `games[product].entitle({ email, item, orderRef })` is the game's own existing step (server to server).
 // CONTRACT for each game: entitle is all-or-nothing and idempotent by orderRef (a repeat gives the same result, never a second grant).
 // It throws an error with `definite: true` only when it is SURE nothing was granted (a refusal). Any other failure is treated as unknown.
+// RUN `retryStuck` EVERY 2 MINUTES (the hold lasts 15 minutes); the 30-minute job is the reconcile, not this one.
 // `store` keeps console orders; production: the console database with a unique spend_key and a real compare-and-set.
 //
 // Every status change is a compare-and-set from the status the caller expects. A caller that loses the race stops.
@@ -32,9 +33,15 @@ const CLAIM_MS = 2 * 60 * 1000; // a worker that has not finished in 2 minutes i
 const REENTITLE_UNTIL_MS = 12 * 60 * 1000; // the hold lasts 15 minutes: repeat the game step only while it is surely open
 const short = (s) => createHash('sha256').update(String(s).trim().toLowerCase()).digest('hex').slice(0, 16);
 
-export function createWallet({ mnp, games = {}, store = memoryStore(), now = Date.now, currencies = ['INR'], sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export function createWallet({ mnp, games = {}, store = memoryStore(), now = Date.now, currencies = ['INR'], alert = () => {}, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const game = (p) => (typeof p === 'string' && Object.hasOwn(games, p) ? games[p] : null);
-  const move = (id, from, patch) => store.cas(id, from, { ...patch, at: now() });
+  // Owner alert the moment an order needs a person (dead letter, review, failed release): the hold may lapse soon.
+  const OWNER_STATES = ['dead_letter', 'needs_review'];
+  const move = (id, from, patch) => {
+    const ok = store.cas(id, from, { ...patch, at: now() });
+    if (ok && OWNER_STATES.includes(patch.status)) { try { alert({ ...store.get(id) }); } catch { /* an alert failure must not stop the flow */ } }
+    return ok;
+  };
 
   /** Prices come from Moneypenny settings (data), never from the page. */
   async function quote(credits) {
