@@ -61,7 +61,7 @@ test('cash on an order is captured only against a noted payment that covers it',
 test('the migration list is remembered: running it again changes nothing', async () => {
   const s = await setup();
   const before = (await s.db.all('SELECT file FROM schema_migrations ORDER BY file')).map((r) => r.file);
-  assert.deepEqual(before, ['0001_init.sql', '0002_gate_fx.sql', '0003_ai_safety.sql']);
+  assert.deepEqual(before, ['0001_init.sql', '0002_gate_fx.sql', '0003_ai_safety.sql', '0004_fixed_pack_price.sql']);
   migrate(s.db);
   migrate(s.db);
   assert.deepEqual((await s.db.all('SELECT file FROM schema_migrations ORDER BY file')).map((r) => r.file), before);
