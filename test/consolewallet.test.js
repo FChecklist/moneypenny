@@ -357,3 +357,15 @@ test('S16: the wallet does not hand out its store', async () => {
   assert.equal(fresh.store, undefined);
   assert.equal(Object.keys(fresh).includes('plant'), false);
 });
+
+test('S17: a row whose workers keep dying still reaches the owner: the hour counts from capture, not from the last attempt', async () => {
+  const { s, w, side, alerts, calls } = await world();
+  await fund(w, side);
+  const t0 = s.clock.t;
+  s.clock.t += 61 * MIN;
+  w.store.plant('l1', { id: 'l1', orderRef: 'tambola-loop', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'l', status: 'granting', tries: 9, holdId: 'h', credits: 1000, at: s.clock.t, capturedAt: t0 });
+  await w.retryStuck();
+  assert.equal(w.store.get('l1').status, 'needs_review');
+  assert.deepEqual(alerts, ['game_step_unknown_too_long']);
+  assert.equal(calls(), 0);
+});

@@ -149,7 +149,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
       return 'stop';
     }
     if (code(r) === 'order_already_paid_with_credits') { // a hold of this order was already captured (lost answer, other worker): go on to grant
-      if (row.holdId) { await move(row.id, ['reserving'], { status: 'captured' }); return 'go'; }
+      if (row.holdId) { await move(row.id, ['reserving'], { status: 'captured', capturedAt: row.capturedAt ?? now() }); return 'go'; }
       await review(row.id, ['reserving'], 'paid_without_hold_id'); return 'stop';
     }
     if (code(r) === 'order_has_open_hold') { // an old hold of this order is still open (it lapses by itself): wait
@@ -166,7 +166,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     if (!await move(row.id, ['reserved'], { status: 'capturing' })) return 'stop';
     let c;
     try { c = await mnp.post('/v1/spend/capture', { hold_id: row.holdId }); } catch { c = null; }
-    if (c && (c.status === 200 || code(c) === 'hold_already_captured')) { await move(row.id, ['capturing'], { status: 'captured' }); return 'go'; }
+    if (c && (c.status === 200 || code(c) === 'hold_already_captured')) { await move(row.id, ['capturing'], { status: 'captured', capturedAt: now() }); return 'go'; }
     const tries = (await bump(row.id));
     // The hold lapsed or vanished before capture: nothing was given yet, so go back and reserve again (same order id).
     const lapsed = c && (c.status === 410 || c.status === 404 || code(c) === 'hold_closed');
@@ -206,7 +206,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     }
     for (const row of (await store.all())) {
       const age = now() - row.at;
-      if (row.status === 'captured' && age > GIVE_UP_MS) await review(row.id, ['captured'], 'game_step_unknown_too_long'); // credits are ours: the owner decides
+      if ((row.status === 'captured' || row.status === 'granting') && now() - (row.capturedAt ?? row.at) > GIVE_UP_MS) await review(row.id, [row.status], 'game_step_unknown_too_long'); // credits are ours: the owner decides
       else if (READY.includes(row.status) && age > CLAIM_MS) await run(row.id);
     }
     const rows = (await store.all());
