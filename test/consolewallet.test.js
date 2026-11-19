@@ -369,3 +369,14 @@ test('S17: a row whose workers keep dying still reaches the owner: the hour coun
   assert.deepEqual(alerts, ['game_step_unknown_too_long']);
   assert.equal(calls(), 0);
 });
+
+test('S18: an order that stays unfinished for any reason (here a refund that keeps dying) reaches the owner after 2 hours', async () => {
+  const { s, w, side, alerts } = await world();
+  await fund(w, side);
+  const t0 = s.clock.t;
+  w.store.plant('r1', { id: 'r1', orderRef: 'tambola-r', email: 'o@x.com', product: 'tambola', item: 'game_standard', spendKey: 'r', status: 'refund_due', tries: 0, holdId: 'h', credits: 1000, at: t0, createdAt: t0 });
+  s.clock.t += 121 * MIN;
+  await w.retryStuck();
+  assert.equal(w.store.get('r1').status, 'needs_review');
+  assert.deepEqual(alerts, ['open_too_long']);
+});

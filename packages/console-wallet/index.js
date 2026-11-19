@@ -54,6 +54,7 @@ const fail = (code, status = 400, extra = {}) => ({ ok: false, status, code, ...
 const code = (r) => r?.body?.error?.code;
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const CLAIM_MS = 2 * 60 * 1000; // a worker that has not finished in 2 minutes is presumed dead
+const OPEN_TOO_LONG_MS = 2 * 60 * 60 * 1000; // any order still unfinished after 2 hours goes to the owner, whatever kept it open
 const GIVE_UP_MS = 60 * 60 * 1000; // an unclear game step is repeated for an hour, then the owner decides (credits are already ours)
 const MAX_TRIES = 5;
 const short = (s) => createHash('sha256').update(String(s).trim().toLowerCase()).digest('hex').slice(0, 32);
@@ -102,7 +103,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     const id = randomUUID();
     const scoped = `${short(email)}:${spendKey}`; // keys belong to one person
     const orderRef = `${product}-${short(scoped)}`; // from the click's key: a retried reserve meets the same order
-    const again = await store.putNew(id, { id, orderRef, email, product, item, spendKey: scoped, status: 'new', tries: 0, at: now() });
+    const again = await store.putNew(id, { id, orderRef, email, product, item, spendKey: scoped, status: 'new', tries: 0, at: now(), createdAt: now() });
     if (again) {
       if (again.product !== product || again.item !== item) return fail('key_conflict', 409);
       // a click refused only for lack of credits may be tried again with the same key after the person buys credits
@@ -206,6 +207,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     }
     for (const row of (await store.all())) {
       const age = now() - row.at;
+      if ((READY.includes(row.status) || row.status in WORK) && now() - (row.createdAt ?? row.at) > OPEN_TOO_LONG_MS) { await review(row.id, [row.status], 'open_too_long'); continue; }
       if ((row.status === 'captured' || row.status === 'granting') && now() - (row.capturedAt ?? row.at) > GIVE_UP_MS) await review(row.id, [row.status], 'game_step_unknown_too_long'); // credits are ours: the owner decides
       else if (READY.includes(row.status) && age > CLAIM_MS) await run(row.id);
     }
