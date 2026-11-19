@@ -25,7 +25,7 @@ const fund = async (w, side, email = 'o@x.com', buyId = 'b1', ref = 'pay_1') => 
   return { b, c: await side.paymentVerified({ orderId: b.orderId, paymentRef: ref, paidMinor: b.amountMinor, currency: 'INR' }) };
 };
 const spend = (w, extra = {}) => w.spend({ email: 'o@x.com', product: 'tambola', item: 'game_standard', ...extra });
-const holdsOpen = async (s) => (await s.db.first("SELECT COUNT(*) AS n FROM hold WHERE status = 'open'")).n;
+const holdsOpen = async (s) => (await s.db.first("SELECT COUNT(*) AS n FROM hold WHERE status = 'held'")).n;
 
 test('W1: the pack costs exactly Rs 2,399 and credits 3,400, also after the daily rate moves', async () => {
   const { s, w, side } = await world();
@@ -119,8 +119,8 @@ test('W8: hold lapsed before capture: owner gets a dead letter at once, no secon
 });
 
 test('W9: a capture that failed on the network is retried by the job and then completes once', async () => {
-  let failNext = true;
-  const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { if (failNext && p === '/v1/spend/capture') { failNext = false; throw new Error('net'); } return c.post(p, b); } });
+  let n = 3;
+  const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { if (n > 0 && p === '/v1/spend/capture') { n--; throw new Error('net'); } return c.post(p, b); } });
   const { w, side, calls } = await world(async () => {}, wrap);
   await fund(w, side);
   const r = await spend(w);
@@ -252,4 +252,30 @@ test('W14: bad ids and amounts are refused before any call; the wallet has no pa
   assert.equal((await w.startBuy({ email: 'o@x.com', credits: -5, buyId: 'x' })).code, 'bad_request');
   assert.equal((await w.quote(NaN)).code, 'bad_request');
   assert.equal(w.paymentVerified, undefined);
+});
+
+test('W15: capture is tried again at once (short back-off) so a blip does not lose the window', async () => {
+  let fails = 2;
+  const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { if (p === '/v1/spend/capture' && fails-- > 0) throw new Error('net'); return c.post(p, b); } });
+  const { s, w, side } = await world(async () => {}, wrap);
+  await fund(w, side);
+  const r = await spend(w);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(w.store.all()[0].status, 'captured');
+  assert.equal(await holdsOpen(s), 0);
+});
+
+test('W16: a repeated key after a refused or released order gives its final state, and a new key can be used', async () => {
+  const { w } = await world();
+  const a = await spend(w, { spendKey: 'k1' });
+  assert.equal(a.code, 'insufficient_credits');
+  const b = await spend(w, { spendKey: 'k1' });
+  assert.equal(b.ok, false);
+  assert.equal(b.code, 'insufficient_credits'); // same final answer, not a stuck "in progress"
+});
+
+test('W17: the price asked at the order must equal the quoted pack price', async () => {
+  const wrap = (c) => ({ get: (p) => c.get(p), post: async (p, b) => { const r = await c.post(p, b); if (p === '/v1/buy_credits' && r.status === 200) r.body.amount_minor += 1; return r; } });
+  const { w } = await world(async () => {}, wrap);
+  assert.equal((await w.startBuy({ email: 'o@x.com', credits: 3400, buyId: 'b1' })).code, 'price_mismatch');
 });

@@ -31,7 +31,7 @@ const CLAIM_MS = 2 * 60 * 1000; // a worker that has not finished in 2 minutes i
 const REENTITLE_UNTIL_MS = 12 * 60 * 1000; // the hold lasts 15 minutes: repeat the game step only while it is surely open
 const short = (s) => createHash('sha256').update(String(s).trim().toLowerCase()).digest('hex').slice(0, 16);
 
-export function createWallet({ mnp, games = {}, store = memoryStore(), now = Date.now, currencies = ['INR'] }) {
+export function createWallet({ mnp, games = {}, store = memoryStore(), now = Date.now, currencies = ['INR'], sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const game = (p) => (typeof p === 'string' && Object.hasOwn(games, p) ? games[p] : null);
   const move = (id, from, patch) => store.cas(id, from, { ...patch, at: now() });
 
@@ -48,9 +48,11 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     if (!currencies.includes(currency)) return fail('currency_not_offered'); // USD packs are an open owner decision
     const q = await mnp.get(`/v1/quote?credits=${credits}`);
     if (q.status !== 200 || q.body.inr_fixed !== true) return fail('not_a_pack'); // sell listed packs only
-    const orderRef = `BUY-${short(email)}-${buyId}`; // scoped to the person: nobody else can take this id
+    const orderRef = `BUY-${short(email)}-${buyId}`;
+    const quoted = q.body.inr_minor; // scoped to the person: nobody else can take this id
     const r = await mnp.post('/v1/buy_credits', { email, credits, currency, order_ref: orderRef });
     if (r.status !== 200) return fail(code(r) ?? 'buy_failed', r.status);
+    if (r.body.amount_minor !== quoted) return fail('price_mismatch', 409); // the order must carry the listed pack price
     return { ok: true, orderRef, orderId: r.body.order_id, amountMinor: r.body.amount_minor, currency: r.body.currency, payUrl: r.body.pay_url ?? null };
   }
 
@@ -70,7 +72,10 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     const again = store.putNew(id, row); // atomic: one row per scoped key
     if (again) {
       if (again.product !== product || again.item !== item) return fail('key_conflict', 409);
-      return again.status === 'captured' ? { ok: true, orderRef: again.orderRef, credits: again.credits, repeat: true } : fail('order_in_progress', 409, { orderRef: again.orderRef, status: again.status });
+      if (again.status === 'captured') return { ok: true, orderRef: again.orderRef, credits: again.credits, repeat: true };
+      if (again.status === 'refused') return fail(again.reason ?? 'refused', 409, { repeat: true });
+      if (again.status === 'released') return fail('game_step_failed', 502, { repeat: true });
+      return fail('order_in_progress', 409, { orderRef: again.orderRef, status: again.status });
     }
     let r;
     try {
@@ -85,14 +90,22 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
       return fail(code(r) ?? 'reserve_failed', r.status);
     }
     // recorded BEFORE the game step: a crash leaves a row the job can see
-    if (!move(id, ['new'], { status: 'entitling', holdId: r.body.hold_id, credits: r.body.credits })) return fail('order_in_progress', 409);
+    if (!move(id, ['new'], { status: 'entitling', holdId: r.body.hold_id, credits: r.body.credits })) {
+      try { await mnp.post('/v1/spend/release', { hold_id: r.body.hold_id }); } catch { /* the hold lapses by itself */ }
+      return fail('order_in_progress', 409);
+    }
     try {
       await g.entitle({ email, item, orderRef });
     } catch {
       return releaseOrder(id, ['entitling'], 'game_step_failed');
     }
     if (!move(id, ['entitling'], { status: 'entitled' })) return fail('order_in_progress', 409);
-    return capture(id);
+    for (let i = 0; i < 3; i++) { // the hold is short: retry at once, with a short back-off, before leaving it to the job
+      const out = await capture(id);
+      if (out.ok || store.get(id)?.status === 'dead_letter') return out;
+      await sleep(i * 200);
+    }
+    return fail('capture_pending', 202, { orderRef });
   }
 
   async function releaseOrder(id, from, why) {
@@ -119,7 +132,7 @@ export function createWallet({ mnp, games = {}, store = memoryStore(), now = Dat
     }
     // The game step is done. A lapsed hold (410) cannot be fixed by retrying: straight to the owner.
     const tries = (store.get(id)?.tries ?? 0) + 1;
-    const dead = c.status === 410 || tries >= 3;
+    const dead = c.status === 410 || tries >= 5; // 3 quick tries in spend, then the job
     move(id, ['capturing'], { tries, status: dead ? 'dead_letter' : 'capture_retry', reason: code(c) ?? 'capture_failed' });
     return fail('capture_pending', 202, { orderRef: row.orderRef });
   }
