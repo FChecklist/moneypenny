@@ -79,3 +79,20 @@ Routes (all in contract/v1/openapi.json): GET /v1/game_pay/quote, POST /start, P
 - Payee e-mail is unverified; used only to match order to payment.
 
 suiteRulesVersion: 1.1 (docs/SUITE_RULES.md)
+
+### Audit results and follow-ups (20 Nov 2026)
+- Auditor A and Auditor B: Moneypenny `ea2469c` PASS, IT Services `ba539e9` PASS (reports in marketing-ledger/boss: AUDIT-gamepay-A / -B). No Blocker or High.
+- Follow-up commits (nothing in ea2469c / ba539e9 was changed):
+  - Moneypenny `fc91f96` TEST ONLY: 12 guard tests GG1-GG12 (test/gamepay-guards.test.js). Each shown to fail when its single guard is removed (12 of 12 caught); `git diff ea2469c fc91f96 -- src` is empty. Suite 337/337 on node and MNP_DB=do.
+  - Moneypenny `e7ae70d` DOCS ONLY (suite rules v1.1).
+  - IT Services `7d7d78f` PRODUCTION CODE (needs re-audit): refunded/disputed payments never pushed; 401/403 retried; `?requeue=1`; run answers 503 `credit_push_dead` while any row is dead. 4 new tests, each break-proven. Suite 81 pass + 1 old retention failure.
+  - IT Services `7d3d0b0` DOCS ONLY: docs/REFUNDS.md (refund procedure), suite rules.
+- Not changed (audit Medium items left for the console or owner): M-M2/M-C2 price shown must be sent by the console; M-M5/M-C1 game id squatting and ownership check (console); L4 pay-link token in the query string; L5 link validity wording (72 h vs 7 days).
+
+### Deploy checklist (DO NOT RUN until the console re-audit passes and BOSS says go)
+1. Re-audit IT Services `7d7d78f` (code change) and confirm tests green.
+2. Read current Cloudflare deployment ids RIGHT BEFORE deploy and write them here as rollback ids: IT Services Pages project `itservices-rajat-agarwal` (previous deployment id), Moneypenny Worker `moneypenny` (previous version id): ______ / ______.
+3. IT Services: `python build.py`; apply D1 migration 0015 to `itservices-payments`; `wrangler pages deploy dist --project-name itservices-rajat-agarwal --branch main`.
+4. Moneypenny: `wrangler deploy` (migration 0005 applies on first request). No Vercel.
+5. Owner: issue the Moneypenny site key on IT Services and set the site row active=1; issue Moneypenny's purchase key; set `MNP_BASE_URL/MNP_KEY_ID/MNP_KEY_SECRET` on IT Services and `ITS_BASE_URL/ITS_SITE/ITS_SITE_KEY` on Moneypenny; confirm the deployed payframe lists console.corporatetambola.com; hook the scheduler to `/api/pay/credit-outbox-run` (watch for 503); Rs 1 test evidence (owner says done earlier: cite it); register the game `game.paid` webhook.
+6. Rollback: IT Services: redeploy the previous Pages deployment id; Moneypenny: `wrangler rollback` to the previous version id. Migrations only add tables/columns, so rolling code back is safe; leave the site row inactive to stop the chain.
