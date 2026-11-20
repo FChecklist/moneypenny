@@ -96,3 +96,26 @@ suiteRulesVersion: 1.1 (docs/SUITE_RULES.md)
 4. Moneypenny: `wrangler deploy` (migration 0005 applies on first request). No Vercel.
 5. Owner: issue the Moneypenny site key on IT Services and set the site row active=1; issue Moneypenny's purchase key; set `MNP_BASE_URL/MNP_KEY_ID/MNP_KEY_SECRET` on IT Services and `ITS_BASE_URL/ITS_SITE/ITS_SITE_KEY` on Moneypenny; confirm the deployed payframe lists console.corporatetambola.com; hook the scheduler to `/api/pay/credit-outbox-run` (watch for 503); Rs 1 test evidence (owner says done earlier: cite it); register the game `game.paid` webhook.
 6. Rollback: IT Services: redeploy the previous Pages deployment id; Moneypenny: `wrangler rollback` to the previous version id. Migrations only add tables/columns, so rolling code back is safe; leave the site row inactive to stop the chain.
+
+### DEPLOYED DARK (20 Nov 2026, owner go typed in this session) — result
+| What | Id | Notes |
+|---|---|---|
+| IT Services Pages `itservices-rajat-agarwal` (production) | NEW `b533b4c2` ; PREVIOUS `6fde89d8` (rollback) | built from merge `704dc75` on branch `deploy/mnp-credit-orders-2026-11-20` = audited `7d3d0b0` + the live visitor-dashboard commit `874fc84` (live was NOT in the audited branch; deploying the audited branch alone would have removed the owner dashboard). The merge adds no code of its own; file lists are disjoint. Tests on the merge: 97 pass + the 1 old retention failure. |
+| IT Services D1 `itservices-payments` | migration 0015 applied with `d1 execute --file` | additive only (site row inactive, product row, `credit_outbox`). The live DB has no d1_migrations records, so `d1 migrations apply` was NOT used. No payment rows read or written. |
+| Moneypenny Worker `moneypenny` | NEW version `8893855d-be23-4308-80dd-b80de69c25ce` at 100% ; PREVIOUS `5d8ac727-536d-4174-9fa3-52fe6dd96b06` (rollback) | src identical to `ea2469c`. `wrangler deploy` uploaded but its route step failed (token lacks zone Workers-routes access); promoted with `wrangler versions deploy`. Custom domain was already set. Migration 0005 runs on the first authenticated request (none made). |
+Rollback: Moneypenny `npx wrangler@3 versions deploy 5d8ac727-536d-4174-9fa3-52fe6dd96b06@100% --name moneypenny -y`. IT Services: Cloudflare dashboard > Pages > itservices-rajat-agarwal > Deployments > `6fde89d8` > Rollback (migration 0015 is additive: leave it; leave the Moneypenny site row inactive).
+Smoke tests (no money, no keys): IT Services credit-order and credit-verify without a key answer 401; credit-outbox-run without key 404; payframe pay.js on the new deployment lists https://console.corporatetambola.com; home 200; /api/console/visitors answers 404 unauthenticated on both old and new (unchanged). Moneypenny: every route answers 401 "unsigned" without keys (game_pay/status, quote, start, payment_confirmed). Dark: no keys issued, no ITS_* vars on Moneypenny (rail unconfigured), Moneypenny site row on IT Services inactive and keyless.
+Not tested live (needs keys, owner): authenticated routes, migration 0005 first run, a real payment.
+
+### Follow-ups (not blockers, from the re-audit)
+- M-5: a dead row for a refunded payment needs a manual dismiss (it re-dies on every requeue by design and keeps the 503 alert on).
+- Missing test: a 403 reply is retried (only 401 is tested).
+
+### OWNER-ONLY steps left to switch it on, in order
+1. Issue Moneypenny's IT Services site key (store hash on the IT Services site row) and set that row `active=1`.
+2. Issue Moneypenny's purchase key; set `MNP_BASE_URL`, `MNP_KEY_ID`, `MNP_KEY_SECRET` on IT Services (Pages secrets) and `ITS_BASE_URL`, `ITS_SITE`, `ITS_SITE_KEY` on the Moneypenny Worker.
+3. Set the rate (and confirm the pack list `inr_packs`) in Moneypenny settings.
+4. Hook the scheduler to `POST /api/pay/credit-outbox-run` (watch for 503).
+5. Register the game server's `game.paid` webhook endpoint.
+6. Rs 1 live test payment (owner says done earlier; cite the record).
+7. Console flag `PAY_VIA_MONEYPENNY` to 1.
