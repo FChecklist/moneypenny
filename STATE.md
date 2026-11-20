@@ -77,3 +77,5 @@ Routes (all in contract/v1/openapi.json): GET /v1/game_pay/quote, POST /start, P
 - Spend keys are tenant-wide, not product-bound (design 13/14; hard gate before console phase).
 - All webhook endpoints receive all events (game filters on data.product / game_ref).
 - Payee e-mail is unverified; used only to match order to payment.
+
+suiteRulesVersion: 1.1 (docs/SUITE_RULES.md)
