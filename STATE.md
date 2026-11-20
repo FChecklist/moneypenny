@@ -51,3 +51,29 @@ Rail call inside the transaction in `buy_credits`; no cron or webhook sender; fi
 
 ## Change after the audited deploy (19 Nov 2026, NOT deployed)
 F1 fix: setting `inr_packs` gives a listed INR pack a fixed price (no margin, no daily-rate change); `purchase_order.fixed_price` (migration 0004) stops a late payment being re-priced. Code differs from the audited 65b86c8: needs two fresh independent PASSes before any redeploy.
+
+## Game pay chain (20 Nov 2026, NOT deployed, branch claude/game-pay-chain-085185)
+Owner order: console -> Moneypenny -> IT Services -> Razorpay. Organizer/host/payee never leave console.corporatetambola.com; Moneypenny, IT Services and Razorpay are API only.
+**Commit to audit (Moneypenny): see `git log -1` of the branch tip; code commit 55c17ed + this STATE note. IT Services branch `feat/credit-order-moneypenny`, commit ba539e9.**
+**Audit request: two independent PASS audits are required (none yet). No self-certification.**
+
+Routes (all in contract/v1/openapi.json): GET /v1/game_pay/quote, POST /start, POST /confirm, POST /payment_confirmed (purchase key, IT Services only), GET /status, POST+GET /link, POST /link/start.
+- quote: cost in credits (from the catalogue, never hard-coded) + US$/Rs display, balance, credits still to buy.
+- start: if short, buys the smallest listed pack that covers the gap (same game ref) and returns `order.payframe` {key, order_id, amount, currency} for the console overlay.
+- confirm / payment_confirmed: credits the lot, then reserve+capture the game in ONE transaction (no stuck hold), emits signed idempotent `game.paid`. Status endpoint by game ref for a closed tab.
+- Payer is fixed at order time; anyone else's payment is refused (`payer_mismatch`). Price change leaves the game open (`price_changed`). Credits arrive but game cannot be paid -> credits stay, game goes to `review`, sweep retries.
+- Pay link: token shown once, only its hash stored; page shows only the amount; payee pays into the ORGANIZER account for that game. Setting `paylink_hours` (default 72).
+- Migration 0005. Tests: 26 new (gamepay.test.js); whole suite 325 pass, 0 fail, on both node and MNP_DB=do. IT Services: 17 new, 77 pass + 1 old failure (retention test, not ours).
+- Falsifiability (break, see fail, restore): payer check removed -> GB6 (+GB7, GL2) fail; gate payer check removed -> GB6 fails; IT Services Moneypenny-only check removed -> access test fails; outbox "once per payment" removed -> duplicate test fails. Honest gap: the three "already paid" guards are layered; removing all of them is caught only by GL1, so exactly-once leans on reserve idempotency plus these guards. Auditors: please probe this.
+
+### Needs owner (nothing here was done)
+1. Deploy go for IT Services branch + migration 0015 (adds Moneypenny site row, inactive), and for Moneypenny + migration 0005.
+2. Issue Moneypenny's IT Services site key and set that site row active=1. Issue a Moneypenny purchase key; set MNP_BASE_URL / MNP_KEY_ID / MNP_KEY_SECRET on IT Services; ITS_BASE_URL / ITS_SITE / ITS_SITE_KEY on the Moneypenny Worker.
+3. Confirm the DEPLOYED payframe allow-list and CSP include console.corporatetambola.com (the source does; deployed copy unchecked).
+4. Hook the scheduler to POST /api/pay/credit-outbox-run (every 30 min, with reconcile).
+5. Rs 1 live test payment; confirm rate and pack list; Razorpay written confirmation.
+6. Register the game server's webhook endpoint for `game.paid`.
+### Known gaps
+- Spend keys are tenant-wide, not product-bound (design 13/14; hard gate before console phase).
+- All webhook endpoints receive all events (game filters on data.product / game_ref).
+- Payee e-mail is unverified; used only to match order to payment.
