@@ -51,3 +51,6 @@ Rail call inside the transaction in `buy_credits`; no cron or webhook sender; fi
 
 ## Change after the audited deploy (19 Nov 2026, NOT deployed)
 F1 fix: setting `inr_packs` gives a listed INR pack a fixed price (no margin, no daily-rate change); `purchase_order.fixed_price` (migration 0004) stops a late payment being re-priced. Code differs from the audited 65b86c8: needs two fresh independent PASSes before any redeploy.
+
+
+suiteRulesVersion: 1.1 (20 Nov 2026). Owner rules copy: docs/SUITE_RULES.md. Source: marketing-ledger plans/SUITE-RULES-VERSION-2026-11-20.md.
