@@ -60,7 +60,7 @@ export function openDb(path = ':memory:') {
 /** [name, sql] for every migration file, in order (Node only; a Worker uses the generated list). */
 export function readMigrationFiles() {
   const dir = join(here, '..', 'migrations');
-  return readdirSync(dir).filter((x) => x.endsWith('.sql')).sort().map((f) => [f, readFileSync(join(dir, f), 'utf8')]);
+  return readdirSync(dir).filter((x) => x.endsWith('.sql')).sort().map((f) => [f, readFileSync(join(dir, f), 'utf8').replaceAll('\r\n', '\n')]); // a Windows checkout may hold CRLF; the bundled list is LF
 }
 
 export function migrate(db, files = readMigrationFiles()) {

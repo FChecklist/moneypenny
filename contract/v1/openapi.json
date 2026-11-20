@@ -60,6 +60,10 @@
       "status": 409,
       "meaning": "This request is already …."
     },
+    "already_paid": {
+      "status": 409,
+      "meaning": "This game was already paid."
+    },
     "already_set_up": {
       "status": 409,
       "meaning": "A tenant already exists."
@@ -156,6 +160,10 @@
       "status": 409,
       "meaning": "That reference was already used."
     },
+    "game_ref_used": {
+      "status": 409,
+      "meaning": "That game id belongs to a different person or item."
+    },
     "hold_already_captured": {
       "status": 409,
       "meaning": "This hold was already captured."
@@ -192,6 +200,10 @@
       "status": 500,
       "meaning": "Could not give credits back."
     },
+    "link_expired": {
+      "status": 410,
+      "meaning": "This link has run out."
+    },
     "more_than_convertible": {
       "status": 422,
       "meaning": "Only … credits can be converted now."
@@ -220,6 +232,10 @@
       "status": 404,
       "meaning": "No such dead letter."
     },
+    "no_game": {
+      "status": 404,
+      "meaning": "No such game."
+    },
     "no_hold": {
       "status": 404,
       "meaning": "No such hold."
@@ -228,9 +244,17 @@
       "status": 404,
       "meaning": "No such item on the price list."
     },
+    "no_link": {
+      "status": 404,
+      "meaning": "This link is not valid."
+    },
     "no_order": {
       "status": 404,
       "meaning": "No such order."
+    },
+    "no_pack_covers": {
+      "status": 422,
+      "meaning": "No credit pack covers what is missing."
     },
     "no_purchase": {
       "status": 404,
@@ -248,6 +272,10 @@
       "status": 404,
       "meaning": "No such route."
     },
+    "nothing_due": {
+      "status": 409,
+      "meaning": "Nothing is due for this game."
+    },
     "nothing_to_return": {
       "status": 409,
       "meaning": "Everything on this order was already returned."
@@ -264,6 +292,10 @@
       "status": 409,
       "meaning": "This order already has a hold. Capture or release it first."
     },
+    "order_mismatch": {
+      "status": 409,
+      "meaning": "That payment belongs to another order."
+    },
     "order_ref_used": {
       "status": 409,
       "meaning": "That order reference was used for a different order."
@@ -275,6 +307,10 @@
     "paused_global": {
       "status": 503,
       "meaning": "The global off-switch has this service (or its reads or writes) switched off."
+    },
+    "payer_mismatch": {
+      "status": 409,
+      "meaning": "That payment was made by someone else."
     },
     "payment_already_used": {
       "status": 409,
@@ -298,7 +334,7 @@
     },
     "price_changed": {
       "status": 409,
-      "meaning": "The pack price has changed. Start a new order."
+      "meaning": "The price has changed."
     },
     "purchase_expired": {
       "status": 409,
@@ -306,7 +342,7 @@
     },
     "rail_not_configured": {
       "status": 503,
-      "meaning": "Buying credits is not switched on yet."
+      "meaning": "Payments are not switched on yet."
     },
     "rail_unavailable": {
       "status": 502,
@@ -1498,6 +1534,481 @@
             "credits": 2000,
             "currency": "INR",
             "order_ref": "buy-2001"
+          }
+        }
+      }
+    },
+    "/v1/game_pay/quote": {
+      "get": {
+        "operationId": "gamePayQuote",
+        "summary": "What one game costs, what the organizer has, what is left to buy",
+        "description": "Keyed by the game id (order_ref). Returns the cost in credits with the US$ and rupee display, the organizer's balance, the credits still to buy and the listed pack that covers them. Writes nothing.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "read",
+        "x-key-classes": [
+          "spend",
+          "read"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [
+          "cost_text",
+          "balance_text",
+          "to_buy.text"
+        ],
+        "x-error-codes": [
+          "bad_request",
+          "bad_signature",
+          "game_ref_used",
+          "no_item",
+          "paused",
+          "paused_global",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/game_pay/start": {
+      "post": {
+        "operationId": "gamePayStart",
+        "summary": "Pay one game: from credits, or open a purchase for the missing credits",
+        "description": "With enough credits the cost is reserved and captured in one step and the game is PAID. With too few, an order for the covering pack is opened for this same game id and the payment window details come back. Asking again never charges again.",
+        "x-rw": "write",
+        "x-money": true,
+        "x-permission-level": "spend",
+        "x-key-classes": [
+          "spend"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "account_frozen",
+          "bad_currency",
+          "bad_signature",
+          "game_ref_used",
+          "idempotency_conflict",
+          "idempotency_key_required",
+          "no_item",
+          "no_pack_covers",
+          "paused",
+          "paused_global",
+          "price_changed",
+          "rail_not_configured",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Any unique text up to 120 characters. The same key with the same request returns the first answer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/game_pay/confirm": {
+      "post": {
+        "operationId": "gamePayConfirm",
+        "summary": "The payment window is done: credit, then pay the game",
+        "description": "Moneypenny asks the payment side what really happened, adds the credits, and pays the game from them in the same step. A wrong payer adds nothing. Safe to repeat.",
+        "x-rw": "write",
+        "x-money": true,
+        "x-permission-level": "spend",
+        "x-key-classes": [
+          "spend"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_signature",
+          "idempotency_conflict",
+          "idempotency_key_required",
+          "no_game",
+          "no_order",
+          "order_mismatch",
+          "paused",
+          "paused_global",
+          "payer_mismatch",
+          "payment_conflict",
+          "rail_not_configured",
+          "rail_unavailable",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Any unique text up to 120 characters. The same key with the same request returns the first answer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/game_pay/payment_confirmed": {
+      "post": {
+        "operationId": "gamePayPaymentConfirmed",
+        "summary": "The payment side pushes a captured payment for a game order",
+        "description": "The backup path for a closed tab. Notes the payment, adds the credits and pays the game, once per payment id. The payer must be the one the order was made for.",
+        "x-rw": "write",
+        "x-money": true,
+        "x-permission-level": "purchase",
+        "x-key-classes": [
+          "purchase"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_signature",
+          "idempotency_conflict",
+          "idempotency_key_required",
+          "no_order",
+          "paused",
+          "paused_global",
+          "payer_mismatch",
+          "payment_conflict",
+          "payment_mismatch",
+          "payment_reversed",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Any unique text up to 120 characters. The same key with the same request returns the first answer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/game_pay/status": {
+      "get": {
+        "operationId": "gamePayStatus",
+        "summary": "Is this game paid yet?",
+        "description": "Poll by game id. status is unknown, open, awaiting_payment, paid or review. When paid it names the signed event told to the game and whether that event was delivered.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "read",
+        "x-key-classes": [
+          "spend",
+          "read"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_request",
+          "bad_signature",
+          "paused",
+          "paused_global",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/game_pay/link": {
+      "post": {
+        "operationId": "gamePayLinkCreate",
+        "summary": "Make a pay link for one game",
+        "description": "The token is shown once and only its hash is kept. One live link per game; a new one cancels the old.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "spend",
+        "x-key-classes": [
+          "spend"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "account_frozen",
+          "already_paid",
+          "bad_signature",
+          "game_ref_used",
+          "idempotency_conflict",
+          "idempotency_key_required",
+          "no_item",
+          "paused",
+          "paused_global",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Any unique text up to 120 characters. The same key with the same request returns the first answer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "gamePayLinkInfo",
+        "summary": "What a payee sees: one amount due",
+        "description": "Shows the amount due and nothing else about the organizer: no balance and no credits.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "spend",
+        "x-key-classes": [
+          "spend"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [
+          "product",
+          "item"
+        ],
+        "x-error-codes": [
+          "bad_currency",
+          "bad_signature",
+          "link_expired",
+          "no_link",
+          "no_pack_covers",
+          "paused",
+          "paused_global",
+          "rate_limited",
+          "rate_stale",
+          "wrong_key_type"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/game_pay/link/start": {
+      "post": {
+        "operationId": "gamePayLinkStart",
+        "summary": "A payee starts paying for the game",
+        "description": "Opens a credit purchase into the organizer's account for this game id. Returns the payment window details. The payee's e-mail is only what the payment is matched to.",
+        "x-rw": "write",
+        "x-money": true,
+        "x-permission-level": "spend",
+        "x-key-classes": [
+          "spend"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": true,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "already_paid",
+          "bad_email",
+          "bad_signature",
+          "idempotency_conflict",
+          "idempotency_key_required",
+          "link_expired",
+          "no_link",
+          "no_pack_covers",
+          "nothing_due",
+          "paused",
+          "paused_global",
+          "price_changed",
+          "rail_not_configured",
+          "rate_limited",
+          "wrong_key_type"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Any unique text up to 120 characters. The same key with the same request returns the first answer.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -2,10 +2,11 @@
 // Products price and spend only in credits and call only this service. This service calls the payment
 // rail (IT Services) through a pluggable adapter. Rail calls wait in an outbox, are retried, and end
 // up as dead letters a person can requeue. Phase 0 ships only the stub rail.
-import { ApiError, MIN, newId, int, ref, isUniqueError } from './util.js';
+import { ApiError, MIN, newId, int, ref, isUniqueError, canonEmail } from './util.js';
 import { getSettings, minorFromCredits, creditsFromMinor, fmtUsd, fmtCredits, displayText, packPrice } from './settings.js';
 import { findAccount, ensureAccount } from './accounts.js';
-import { creditPurchase, payId } from './wallet.js';
+import { creditPurchase, payId, findPayment } from './wallet.js';
+import { settleForOrder } from './gamepay.js';
 import { displayRate, currentRate } from './fx.js';
 import { audit } from './audit.js';
 import { emit } from './outbox.js';
@@ -85,7 +86,7 @@ export async function quote(ctx, credits, currency = null) {
 
 // ---------- buy credits ----------
 /** A product asks for credits for a person. We ask the rail for an order; credits arrive only on confirmation. */
-export async function buyCredits(ctx, b) {
+export async function buyCredits(ctx, b, { gameRef = null, payerEmail = null } = {}) {
   const s = await getSettings(ctx);
   const orderRef = ref(b.order_ref, 'order_ref');
   const credits = int(b.credits, 'credits', { min: s.buy_min_credits, max: s.buy_max_credits });
@@ -110,8 +111,8 @@ export async function buyCredits(ctx, b) {
   const id = newId('ord');
   const now = ctx.now();
   await ctx.db.run(
-    "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, fixed_price, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending_rail',?,?)",
-    id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, now + s.rate_lock_minutes * MIN, s.credits_per_usd, s.inr_paise_per_usd, fixed ? 1 : 0, now, now,
+    "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, fixed_price, status, created_at, updated_at, game_ref, payer_email) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending_rail',?,?,?,?)",
+    id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, now + s.rate_lock_minutes * MIN, s.credits_per_usd, s.inr_paise_per_usd, fixed ? 1 : 0, now, now, gameRef, payerEmail,
   );
   await ctx.db.run('INSERT INTO rail_outbox (id, tenant_id, order_id, next_at, created_at) VALUES (?,?,?,?,?)', newId('rob'), ctx.tenantId, id, now, now);
   await processRail(ctx, ctx.rail, { orderId: id });
@@ -121,6 +122,7 @@ export async function buyCredits(ctx, b) {
 const orderView = (o) => ({
   order_id: o.id, order_ref: o.order_ref, status: o.status, credits: o.credits, currency: o.currency, amount_minor: o.amount_minor, fixed_price: !!o.fixed_price,
   pay_url: o.pay_url ?? null, rail_order_id: o.rail_order_id ?? null,
+  ...(o.payframe ? { payframe: JSON.parse(o.payframe) } : {}),
 });
 
 /** Sends waiting orders to the rail. A failure waits (back-off) and tries again; after too many tries it is a dead letter. */
@@ -138,9 +140,11 @@ export async function processRail(ctx, rail, { orderId = null, limit = 25 } = {}
     }
     try {
       // The rail must treat order_id as its idempotency key: a retry must not make a second order.
-      const out = await withTimeout(rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits }), 4000);
+      const who = o.payer_email ?? (await ctx.db.first('SELECT email_norm FROM account WHERE id = ?', o.account_id))?.email_norm ?? null; // the payer is fixed here, at order time
+      const out = await withTimeout(rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits, payer_email: who, game_ref: o.game_ref ?? null }), 4000);
       if (!out || typeof out.rail_order_id !== 'string') throw new Error('rail gave no order id');
-      await ctx.db.run("UPDATE purchase_order SET status = 'awaiting_payment', rail_order_id = ?, pay_url = ?, updated_at = ? WHERE id = ?", out.rail_order_id, typeof out.pay_url === 'string' ? out.pay_url : null, ctx.now(), o.id);
+      const frame = out.payframe && typeof out.payframe === 'object' ? JSON.stringify(out.payframe).slice(0, 4000) : null;
+      await ctx.db.run("UPDATE purchase_order SET status = 'awaiting_payment', rail_order_id = ?, pay_url = ?, payframe = ?, updated_at = ? WHERE id = ?", out.rail_order_id, typeof out.pay_url === 'string' ? out.pay_url : null, frame, ctx.now(), o.id);
       await ctx.db.run("UPDATE rail_outbox SET status = 'sent', attempts = attempts + 1, last_error = NULL WHERE id = ?", j.id);
       sent++;
     } catch (e) {
@@ -207,19 +211,28 @@ export async function railConfirm(ctx, b) {
   if (b.currency !== o.currency) throw new ApiError(422, 'payment_mismatch', 'The payment currency does not match the order.');
   if (paid < o.amount_minor) throw new ApiError(422, 'payment_mismatch', 'The payment is less than the order amount.');
   const acc = await ctx.db.first('SELECT email_norm FROM account WHERE id = ?', o.account_id);
+  // An order made for a game is only credited against a payment the payment side noted, made by the person the order was made for.
+  const mustPay = o.payer_email ?? acc.email_norm;
+  if (o.game_ref) {
+    const known = await findPayment(ctx, payRef);
+    if (!known) throw new ApiError(402, 'payment_not_verified', 'That payment has not been confirmed by the payment side yet.');
+    if (known.payer !== canonEmail(mustPay)) throw new ApiError(409, 'payer_mismatch', 'That payment was made by someone else.');
+  }
   // Inside the lock window the order's own rate and credits apply. Later, an INR payment is re-priced at today's rate
   // (the money is in, so it is never refused); it can never buy more credits than the money is worth at that rate.
   const s = await getSettings(ctx);
   const late = ctx.now() > o.lock_until; // fixed when the order was made; changing the setting later does not re-price open orders
   const repriced = late && o.currency === 'INR' && s.fx_state !== 'stale' && !o.fixed_price; // a fixed-price pack is never re-priced // with no usable rate the order's own terms apply
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
-  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr }, fixedPrice: !!o.fixed_price }); // the order check above already proved paid >= the fixed price
+  const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, { payer: mustPay, ...(repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr }, fixedPrice: !!o.fixed_price }) }); // the order check above already proved paid >= the fixed price
   await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);
   // More money than the order asked for: credits are given for the order only. The extra is flagged so the payment side can refund it.
   const overpaid = !repriced && paid > o.amount_minor ? paid - o.amount_minor : 0;
   if (overpaid) await emit(ctx, 'payment.overpaid', { order_id: o.id, payment_ref: payRef, overpaid_minor: overpaid, currency: o.currency });
   await ctx.db.run("UPDATE rail_outbox SET status = 'sent' WHERE order_id = ? AND status != 'sent'", o.id);
-  return { order_id: o.id, status: 'paid', credited: out.credited, ...(repriced ? { repriced: true } : {}), ...(overpaid ? { overpaid_minor: overpaid } : {}) };
+  // The credits are in (the money is safe). If this order was for a game, pay that game from them now, in the same step.
+  const game = o.game_ref ? await settleForOrder(ctx, o) : null;
+  return { order_id: o.id, status: 'paid', credited: out.credited, ...(repriced ? { repriced: true } : {}), ...(overpaid ? { overpaid_minor: overpaid } : {}), ...(game ? { game } : {}) };
 }
 
 // ---------- health ----------

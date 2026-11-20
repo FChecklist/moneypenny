@@ -3,10 +3,12 @@
 import { newId, hmacHex, ApiError, MIN } from './util.js';
 
 export async function emit(ctx, type, payload) {
+  const id = newId('evt');
   await ctx.db.run(
     'INSERT INTO outbox (id, tenant_id, type, payload, created_at, next_at) VALUES (?,?,?,?,?,?)',
-    newId('evt'), ctx.tenantId, type, JSON.stringify(payload), ctx.now(), ctx.now(),
+    id, ctx.tenantId, type, JSON.stringify(payload), ctx.now(), ctx.now(),
   );
+  return id;
 }
 
 export const webhookSecret = (master, endpointId) => hmacHex(master, `mnp-wh:${endpointId}`);

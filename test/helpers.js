@@ -12,13 +12,13 @@ export { DAY, MIN, HOUR };
 export const T0 = Date.UTC(2026, 10, 17, 9, 0, 0);
 
 /** Fresh in-memory app with a controllable clock and the 'demo' tenant. */
-export async function setup({ other = false, requireRate = false } = {}) {
+export async function setup({ other = false, requireRate = false, rail = undefined } = {}) {
   const db = process.env.MNP_DB === 'do' ? doDb(fakeStorage()) : openDb(); // MNP_DB=do runs the whole suite on the Durable Object adapter
   migrate(db);
   const clock = { t: T0 };
   const now = () => clock.t;
   const master = randomBytes(24).toString('hex'); // random per run: no secret in code
-  const app = createApp({ db, master, now, aiWithoutStatus: true, requireRate });
+  const app = createApp({ db, master, now, aiWithoutStatus: true, requireRate, ...(rail ? { rail } : {}) });
   const demo = await db.tx((t) => seedDemo({ db: t, now, master }));
   let b = null;
   if (other) b = await db.tx((t) => createTenant({ db: t, now, master }, { id: 'tenb', name: 'Other' }));

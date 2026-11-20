@@ -12,6 +12,7 @@ import { isVisitLike } from './wallet.js';
 import { reconcile } from './reconcile.js';
 import { processRail, expireOrders, railHealth, fxHealth } from './gate.js';
 import { expireApprovals } from './ai.js';
+import { settleOpen } from './gamepay.js';
 
 /** Owner/CLI use only (not an API route): makes a tenant with default settings and two keys. */
 export async function createTenant(ctx, { id, name }) {
@@ -125,9 +126,10 @@ export async function sweep(ctx) {
   const rail = await processRail(ctx, ctx.rail);
   const orders = await expireOrders(ctx);
   const approvals = await expireApprovals(ctx);
+  const game_pay = await settleOpen(ctx); // games whose credits arrived but which are not paid yet
   await ctx.db.run('DELETE FROM idempotency WHERE tenant_id = ? AND created_at < ?', ctx.tenantId, ctx.now() - 30 * 86400000);
-  await audit(ctx, 'sweep', { holds, lots, rail, orders, approvals });
-  return { holds, lots, rail, orders, approvals };
+  await audit(ctx, 'sweep', { holds, lots, rail, orders, approvals, game_pay });
+  return { holds, lots, rail, orders, approvals, game_pay };
 }
 
 export { reconcile };

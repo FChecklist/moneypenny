@@ -31,6 +31,7 @@ export const SCHEMA = {
   bonus_needs_paid: { type: 'bool', def: 1, doc: 'Bonus is spendable only once the person has real paid value on record (net of refunds and chargebacks).' },
   bonus_unlock_min_credits: { type: 'int', def: 100, min: 1, max: 100000000, doc: 'Real paid value (in credits) needed before bonus can be spent (100 = US$1).' },
   commission_hold_days: { type: 'int', def: 7, min: 0, max: 365, doc: 'Days before commission credits can be spent.' },
+  paylink_hours: { type: 'int', def: 72, min: 1, max: 720, doc: 'Hours a pay link (a payee paying for one game) stays valid.' },
   hold_minutes: { type: 'int', def: 15, min: 1, max: 120, doc: 'Minutes a reserve (hold) lasts.' },
   capture_grace_minutes: { type: 'int', def: 5, min: 0, max: 120, doc: 'Extra minutes a late payment may still capture a hold.' },
   min_cash_due_inr: { type: 'int', def: 100, min: 0, max: 100000000, doc: 'Smallest cash left to pay in paise (payment gateway minimum). 0 = none.' },

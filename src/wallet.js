@@ -154,7 +154,7 @@ export async function claimPaymentRef(ctx, refId, kind) {
 
 // ---------- credit in: purchase ----------
 /** Bought credits, only against a verified real payment (payment_ref is the IT Services / Razorpay payment id). */
-export async function creditPurchase(ctx, b, { lock = null, fixedPrice = false } = {}) {
+export async function creditPurchase(ctx, b, { lock = null, fixedPrice = false, payer = null } = {}) {
   let s = await getSettings(ctx);
   if (!lock && b.currency === 'INR' && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly.');
   if (lock) s = { ...s, credits_per_usd: lock.rateCpu, inr_paise_per_usd: lock.rateInr }; // an order keeps the rate it was made at
@@ -167,7 +167,7 @@ export async function creditPurchase(ctx, b, { lock = null, fixedPrice = false }
   // A paused account may still be credited: the money has already been taken, so the credits must exist.
   const noted = await ctx.db.first('SELECT payer_canon, paid_minor, currency FROM verified_payment WHERE tenant_id = ? AND ref = ?', ctx.tenantId, payRef);
   if (noted && (noted.currency !== currency || paidMinor > noted.paid_minor)) throw new ApiError(409, 'payment_conflict', 'That payment was noted with different figures.');
-  if (noted && noted.payer_canon !== canonEmail(emailOrThrow(b.email))) throw new ApiError(409, 'payment_conflict', 'That payment was made by someone else.');
+  if (noted && noted.payer_canon !== canonEmail(emailOrThrow(payer ?? b.email))) throw new ApiError(409, 'payment_conflict', 'That payment was made by someone else.');
   const acc = await ensureAccount(ctx, b.email);
   await claimPaymentRef(ctx, payRef, 'purchase');
   const lotId = await createLot(ctx, { accountId: acc.id, bucket: 'bought', amount, source: 'purchase', sourceRef: payRef, origin: payRef, expiresAt: expiryFor(s, 'bought', ctx.now()), paidMinor, currency, kind: 'purchase', extRef: payRef, ...(lock || {}) });

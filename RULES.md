@@ -33,6 +33,7 @@ Change them with `PUT /v1/admin/settings` or the local admin page. Every change 
 | `bonus_needs_paid` | `1` | Bonus is spendable only once the person has real paid value on record (net of refunds and chargebacks). |
 | `bonus_unlock_min_credits` | `100` | Real paid value (in credits) needed before bonus can be spent (100 = US$1). |
 | `commission_hold_days` | `7` | Days before commission credits can be spent. |
+| `paylink_hours` | `72` | Hours a pay link (a payee paying for one game) stays valid. |
 | `hold_minutes` | `15` | Minutes a reserve (hold) lasts. |
 | `capture_grace_minutes` | `5` | Extra minutes a late payment may still capture a hold. |
 | `min_cash_due_inr` | `100` | Smallest cash left to pay in paise (payment gateway minimum). 0 = none. |

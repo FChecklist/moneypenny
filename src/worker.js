@@ -3,6 +3,7 @@
 // the adapter it uses (do.js) is tested against a stand-in storage in test/do.test.js.
 import { DurableObject } from 'cloudflare:workers';
 import { unconfiguredRail } from './rail.js';
+import { itServicesRail } from './itservices-rail.js';
 import { createApp } from './api.js';
 import { doDb } from './do.js';
 import { migrateFiles as migrate } from './migrate.js';
@@ -17,7 +18,7 @@ export class MoneypennyDO extends DurableObject {
       const db = doDb(ctx.storage);
       ctx.storage.transactionSync(() => migrate(db, MIGRATIONS)); // a half-applied migration is rolled back
       // MNP_STATUS_URL (a plain variable, not a secret) points at the Hub's status.json: the global off-switch
-      this.app = createApp({ db, master: env.MNP_MASTER_SECRET, rail: unconfiguredRail, status: env.MNP_STATUS_URL ? urlStatus(env.MNP_STATUS_URL, { store: { get: () => ctx.storage.get('mnp_status'), set: (v) => ctx.storage.put('mnp_status', v) } }) : env.MNP_STATUS_OPTIONAL === '1' ? async () => ({ hub: { mode: 'on' } }) /* chosen on purpose: no global switch */ : async () => null /* no switch configured: changes stay shut */, requireRate: true });
+      this.app = createApp({ db, master: env.MNP_MASTER_SECRET, rail: env.ITS_BASE_URL && env.ITS_SITE && env.ITS_SITE_KEY ? itServicesRail({ baseUrl: env.ITS_BASE_URL, site: env.ITS_SITE, siteKey: env.ITS_SITE_KEY }) : unconfiguredRail, /* the payment side is connected only when all three are set (Worker secrets) */ status: env.MNP_STATUS_URL ? urlStatus(env.MNP_STATUS_URL, { store: { get: () => ctx.storage.get('mnp_status'), set: (v) => ctx.storage.put('mnp_status', v) } }) : env.MNP_STATUS_OPTIONAL === '1' ? async () => ({ hub: { mode: 'on' } }) /* chosen on purpose: no global switch */ : async () => null /* no switch configured: changes stay shut */, requireRate: true });
     });
   }
   fetch(request) {

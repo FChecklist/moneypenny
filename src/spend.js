@@ -124,6 +124,17 @@ async function placeHold(ctx, s, acc, parts, h) {
   return { holdId, expiresAt };
 }
 
+/** What of `need` credits this person could spend right now (nothing is written). `acc` may be null. */
+export async function usableCredits(ctx, s, acc, need) {
+  const now = ctx.now();
+  const lots = acc
+    ? await ctx.db.all('SELECT * FROM lot WHERE tenant_id = ? AND account_id = ? AND remaining > 0 AND (expires_at IS NULL OR expires_at > ?) AND eligible_at <= ?', ctx.tenantId, acc.id, now, now)
+    : [];
+  const canUseBonus = acc ? !s.bonus_needs_paid || acc.paid_credits >= s.bonus_unlock_min_credits : false;
+  const parts = allocate(lots, need, Math.floor((need * s.bonus_max_order_pct) / 100), canUseBonus);
+  return { parts, have: sum(parts) };
+}
+
 /**
  * Spend by price list: the item costs a fixed number of credits, nothing else. All or nothing:
  * not enough usable credits means 402 and the shortfall, never a part-payment in cash.
@@ -147,13 +158,7 @@ export async function reserveItem(ctx, b) {
   if (open) throw new ApiError(409, 'order_has_open_hold', 'This order already has a hold. Capture or release it first.');
   const done = await ctx.db.first("SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'captured'", ctx.tenantId, orderRef);
   if (done) throw new ApiError(409, 'order_already_paid_with_credits', 'This order was already completed.');
-  const now = ctx.now();
-  const lots = acc
-    ? await ctx.db.all('SELECT * FROM lot WHERE tenant_id = ? AND account_id = ? AND remaining > 0 AND (expires_at IS NULL OR expires_at > ?) AND eligible_at <= ?', ctx.tenantId, acc.id, now, now)
-    : [];
-  const canUseBonus = acc ? !s.bonus_needs_paid || acc.paid_credits >= s.bonus_unlock_min_credits : false;
-  const parts = allocate(lots, need, Math.floor((need * s.bonus_max_order_pct) / 100), canUseBonus);
-  const have = sum(parts);
+  const { parts, have } = await usableCredits(ctx, s, acc, need);
   if (have < need) throw new ApiError(402, 'insufficient_credits', 'Not enough credits for this.', { price_credits: need, usable_credits: have, short_by: need - have });
   const { holdId, expiresAt } = await placeHold(ctx, s, acc, parts, { orderRef, orderMinor: 0, cur: 'CRD', credits: need, cashDue: 0, product, item });
   return { hold_id: holdId, credits: need, product, item, expires_at: expiresAt };
