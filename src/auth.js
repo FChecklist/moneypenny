@@ -16,6 +16,21 @@ export async function createApiKey(ctx, { scope, label = null }) {
 
 const MAX_SKEW = 5 * MIN;
 
+/**
+ * Cheap first check with no database: are the signed headers there, and does the signature match?
+ * The signing secret comes from the master secret and the key id, so a forged call is refused here
+ * and never takes a turn on the single writer (a flood of unsigned calls cannot slow real payments).
+ */
+export async function precheckSignature(master, headers, method, pathQuery, rawBody) {
+  const keyId = headers.get('x-mnp-key');
+  const ts = headers.get('x-mnp-timestamp');
+  const nonce = headers.get('x-mnp-nonce');
+  const sig = headers.get('x-mnp-signature');
+  if (!keyId || !ts || !nonce || !sig || nonce.length > 100 || keyId.length > 64 || ts.length > 20) throw new ApiError(401, 'unsigned', 'Signed headers are missing.');
+  const expect = await hmacHex(await keySecret(master, keyId), signString(ts, nonce, method, pathQuery, await sha256Hex(rawBody), headers.get('idempotency-key') ?? ''));
+  if (!safeEqual(expect, sig)) throw new ApiError(401, 'bad_signature', 'Signature not accepted.');
+}
+
 /** Returns {tenantId, scope, keyId}. Writes the nonce and rate counter, so call it in its own transaction. */
 export async function authenticate(ctx, headers, method, pathQuery, rawBody, rateLimitFor) {
   const keyId = headers.get('x-mnp-key');
