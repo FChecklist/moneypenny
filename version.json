@@ -1,0 +1,14 @@
+{
+  "product": "corporate-moneypenny",
+  "version": "0.1.0",
+  "releasedAt": "2026-11-19T03:33:55Z",
+  "releasedAtIST": "2026-11-19T09:03:55+05:30",
+  "commit": "65b86c8",
+  "changes": [
+    {
+      "version": "0.1.0",
+      "releasedAt": "2026-11-19T03:33:55Z",
+      "notes": "First live version of the Moneypenny credit ledger on its Cloudflare Worker (code 65b86c8, deployed 19 Nov 2026 IST; time shown is that commit's time because the exact deploy time was not recorded). Built over 17 to 19 Nov 2026 from the Phase 0 build and 19 audit rounds: ledger, spend holds, price list, FX table, AI-ready API, API contract, SQLite Durable Object executor. No payment side or rate source is connected. Changes made after this code (INR fixed pack price and the console wallet module) are in the repo but not deployed; see CHANGELOG.md, Not yet deployed."
+    }
+  ]
+}
