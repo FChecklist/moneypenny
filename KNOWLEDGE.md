@@ -1,12 +1,13 @@
 # Knowledge: Corporate Moneypenny
 
-For what the product is and how it is built, see README.md. For the live state and handover notes see STATE.md. For owner decisions see OWNER-DECISIONS.md.
+For going live (steps, secret names, the Rs 1 test, flags, rollback) see `docs/GO-LIVE.md`. For what the product is and how it is built, see README.md. For the live state and handover notes see STATE.md. For owner decisions see OWNER-DECISIONS.md.
 
 ## Version
 
-- Current version: **0.1.0** (live since 19 Nov 2026 IST, code 65b86c8). The same number is in `package.json`.
+- Live version: **0.1.0** (live since 19 Nov 2026 IST, code 65b86c8).
+- Prepared, not deployed: **0.2.0** (21 Nov 2026 IST). `package.json` and `version.json` say 0.2.0; `version.json` has `status: "prepared, not deployed"`, `releasedAt: null` and `commit: null` until the deployer fills them in at deploy time (and sets `status` to `deployed`).
 - Where the version lives: `version.json` at the repo root (product, version, releasedAt, releasedAtIST, commit, and a `changes` list). This product has no static site; the Worker serves the API only, so `version.json` is not served. Version history in words: `CHANGELOG.md`.
-- Not yet deployed: the INR fixed pack price and the console wallet module are in the repo but not live. They get their own version when they are deployed.
+- Not yet deployed: everything since 65b86c8 (INR fixed pack price, console wallet module, the go-live hardening below). All of it is in 0.2.0.
 
 ### How to bump (mandatory for every deployed change)
 
@@ -17,3 +18,14 @@ For what the product is and how it is built, see README.md. For the live state a
    - `CHANGELOG.md`: new entry at the top, in plain words, dated in IST
    - this Version section
 3. Never deploy without the bump. Version notes live only in this repo's own git.
+
+## Go-live knowledge (0.2.0)
+
+- Payment chain: game -> `console.corporatetambola.com` -> Moneypenny -> IT Services (Pages + D1) -> Razorpay. One payee (IT Services), one gateway (Razorpay) in every text. Moneypenny never moves money.
+- The live Worker has no payment side (`unconfiguredRail` in `src/worker.js`): `buy_credits` refuses. Connecting IT Services means a new adapter that passes `railContract` (`src/rail.js`), shipped as its own release with two audits.
+- Flags `PAY_VIA_MONEYPENNY` and `PAY_VIA_CONSOLE` live in the game and console projects, not here. Both stay OFF until the owner's own real Rs 1 payment passes every check in `docs/GO-LIVE.md` (step D3). Moneypenny's own brakes: no rail wired, Hub status switch, tenant `kill_switch`, key revoke.
+- Key secrets are derived from `MNP_MASTER_SECRET`: changing it kills every key. Names of secrets only, never values, in docs, tickets, chat and logs.
+- Safety rules that are watched by tests: run `npm run guards` (about two minutes). It must say "None are unwatched."
+- A forged call is refused before it reaches the single writer (`precheckSignature` in `src/auth.js`). Logs go through `redact` (`src/util.js`).
+- Open: IT Services adapter and Pages/D1 side, owner-only gate for the test, console permanent store and 2-minute job, scheduling of sweep and event sending, Moneypenny Chat (does not exist in this repo), owner decisions in `OWNER-DECISIONS.md`.
+- Test fixtures use `example.com` addresses only for new tests; older tests use `x.com` placeholders that never leave the test run.

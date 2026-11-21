@@ -51,3 +51,6 @@ Rail call inside the transaction in `buy_credits`; no cron or webhook sender; fi
 
 ## Change after the audited deploy (19 Nov 2026, NOT deployed)
 F1 fix: setting `inr_packs` gives a listed INR pack a fixed price (no margin, no daily-rate change); `purchase_order.fixed_price` (migration 0004) stops a late payment being re-priced. Code differs from the audited 65b86c8: needs two fresh independent PASSes before any redeploy.
+
+## 21 Nov 2026: go-live plan written (NOT deployed)
+`docs/GO-LIVE.md` has the ordered steps, secret names, the owner's own Rs 1 test, the two flags (`PAY_VIA_MONEYPENNY`, `PAY_VIA_CONSOLE`) that stay OFF until it passes, and rollback. Version 0.2.0 prepared (see CHANGELOG.md). Blocked on: the IT Services adapter and Pages/D1 side, the console permanent store, an owner-only gate for the test. Moneypenny Chat does not exist in this repo.

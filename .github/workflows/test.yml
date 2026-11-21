@@ -13,3 +13,4 @@ jobs:
       - run: npm test
       - run: MNP_DB=do npm test
       - run: npm run scan
+      - run: npm run guards

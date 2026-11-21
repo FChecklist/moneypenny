@@ -38,3 +38,31 @@ export const unconfiguredRail = {
     throw new Error('rail_not_configured');
   },
 };
+
+/**
+ * What every real payment-rail adapter must do, as a check. Run it against the adapter (with a sandbox account, never real money):
+ * it returns the list of broken promises (empty = good). A repeat of createOrder with the same order_id MUST return the same order,
+ * because Moneypenny repeats the call after a timeout, a restart or a requeue.
+ */
+export async function railContract(rail, { timeoutMs = 4000 } = {}) {
+  const bad = [];
+  const slow = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('too long')), timeoutMs))]);
+  const order = (id) => ({ order_id: id, order_ref: `REF-${id}`, amount_minor: 100, currency: 'INR', credits: 100 });
+  try {
+    const h = await slow(rail.health());
+    if (!h || typeof h.ok !== 'boolean') bad.push('health() must return { ok: true or false }');
+    else if (h.ok !== true) bad.push('health() says the rail is not ok');
+  } catch (e) { bad.push(`health() failed or took too long: ${String(e && e.message).slice(0, 60)}`); }
+  try {
+    const a = await slow(rail.createOrder(order('contract-1')));
+    if (!a || typeof a.rail_order_id !== 'string' || !a.rail_order_id) bad.push('createOrder() must return a text rail_order_id');
+    else {
+      const again = await slow(rail.createOrder(order('contract-1')));
+      if (!again || again.rail_order_id !== a.rail_order_id) bad.push('createOrder() twice with the same order_id must return the same order (same rail_order_id), never a second order');
+      const other = await slow(rail.createOrder(order('contract-2')));
+      if (other && other.rail_order_id === a.rail_order_id) bad.push('createOrder() for another order_id must make another order');
+    }
+    if (a && a.pay_url != null && !(typeof a.pay_url === 'string' && /^https:\/\//.test(a.pay_url))) bad.push('pay_url must be an https address');
+  } catch (e) { bad.push(`createOrder() failed or took too long (limit ${timeoutMs} ms): ${String(e && e.message).slice(0, 60)}`); }
+  return bad;
+}

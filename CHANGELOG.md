@@ -2,9 +2,25 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
-## Not yet deployed (in the repo, not live)
+## 0.2.0 (prepared 21 Nov 2026, 22:50 IST; NOT deployed yet)
 
-These changes are after the deployed code (65b86c8). They need fresh independent audit passes before a deploy, and a version bump (see KNOWLEDGE.md) when they go live.
+Live code is still 0.1.0. This number goes live only after two independent audit passes on the exact code, and `version.json` then gets its release time and code id.
+
+In plain words:
+
+- New plan for going live: `docs/GO-LIVE.md`. Ordered steps, which secrets to set (names only), the owner's own Rs 1 test through the whole chain (game, console, Moneypenny, IT Services, Razorpay), the two money flags that stay OFF until that test passes, and how to roll back.
+- Forged or unsigned calls are now turned away before they can join the single queue that all payments use, and they cannot use up a real key's per-minute allowance.
+- If something breaks inside the service, the log line no longer contains e-mail addresses or long secret-looking text.
+- The public health page asks the payment side at most once every 30 seconds, so nobody can use it to hammer IT Services.
+- New check (`railContract`) that any real payment-side connection must pass, including "a repeated order id gives the same order, never a second one".
+- New `npm run guards`: removes each safety rule one at a time in a throw-away copy and fails if no test notices. Covers repeat-safe money writes, whole numbers only, the append-only hash-chained ledger, replay protection, rate limits, off-switches and log redaction.
+- 19 new tests (including a rehearsal of the Rs 1 test with stand-ins). No real payment, no real service, only example.com addresses.
+- Not changed: no money flag, no deploy setting, no database change. Still open: the IT Services connection inside Moneypenny, the IT Services pay page, the console's permanent order store, scheduling of housekeeping and event sending, and Moneypenny Chat (nothing of it exists in this repo). See `docs/GO-LIVE.md`, section 8.
+- Included in this release (in the repo since 19 Nov, never deployed): the console wallet module, the fixed INR pack price, and the version files first proposed in PR 1 (which this branch contains).
+
+## Not yet deployed (in the repo, not live) - now rolled into 0.2.0 above
+
+These changes are after the deployed code (65b86c8). They are part of 0.2.0 and need fresh independent audit passes before a deploy.
 
 - 20 Nov 2026, 00:11: Console wallet: the failure count restarts after each successful step.
 - 20 Nov 2026, 00:06 to 00:08: Console wallet: any unfinished order reaches the owner after 2 hours; a reopened click restarts its clock.
