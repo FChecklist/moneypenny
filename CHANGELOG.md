@@ -2,7 +2,20 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
-## 0.2.1 (prepared 22 Nov 2026, 05:30 IST; NOT deployed yet)
+## 0.2.2 (prepared 2026-11-22T16:25:21 IST; NOT deployed yet)
+
+Second fix round on the go-live plan, after audit 1 of 0.2.1 said FAIL (one Medium, docs only; audit 2 passed). Live code is still 0.1.0. Nothing is turned on, no money flag changed, nothing deployed, no source code changed.
+
+In plain words:
+
+- The plan still had two flag rules. Section 6 said the flags stay OFF until the Rs 1 test passes, while the test step turns them ON. Section 6, `STATE.md` and the pull request now say the same one rule as section 4: no customer can reach payment until D3 items 1 to 10 and D4 pass on the same run; during D1 to D3 the flags are ON only behind the audited owner-only gate. Step D1 now also says where the gate sits: in front of the flag, so the owner is let through and everyone else is refused.
+- Two safety checks are still not watched by any test (`src/spend.js` lines 262 and 224). They are listed honestly in the plan (section 10) and in `KNOWLEDGE.md`. No extra money can leave, because later checks stop it.
+- The plan said the database freeze is "up to 4 seconds". The admin sweep can chain up to 25 such calls, so the worst case there is about 100 seconds. Wording corrected, and the gate now asks for a test that no payment-side call happens inside the transaction.
+- `preparedAt` in `version.json` and in this file is now the real time of the commit (it was a round number).
+- Test G21 (log cleaner length cut) no longer depends on how fast the computer is. It now checks how long the text is when each pattern runs.
+- Same 46 listed guards, 319 tests.
+
+## 0.2.1 (prepared 22 Nov 2026, 10:28 UTC / 15:58 IST; NOT deployed yet)
 
 Fix round after two independent audits of 0.2.0 (both said FAIL, on the go-live plan). Live code is still 0.1.0. Nothing is turned on, no money flag changed, nothing deployed.
 

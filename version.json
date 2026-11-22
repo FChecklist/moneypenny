@@ -1,19 +1,26 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-22T00:00:00Z",
-  "preparedAtIST": "2026-11-22T05:30:00+05:30",
+  "preparedAt": "2026-11-22T10:55:21Z",
+  "preparedAtIST": "2026-11-22T16:25:21+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
     {
+      "version": "0.2.2",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-22T10:55:21Z",
+      "releasedAt": null,
+      "notes": "Second fix round on the go-live plan after audit 1 of 0.2.1 failed on one docs Medium. Section 6, STATE.md and the PR text now say the same one rule as section 4 (no customer reaches payment until D3 items 1 to 10 and D4 pass on the same run; during D1 to D3 the flags are ON only behind the audited owner-only gate, which sits in front of the flag). Two safety checks that no test watches (spend.js lines 262 and 224) are listed honestly; later checks stop any extra money. Lock-freeze wording now covers the admin sweep (about 100 seconds worst case). preparedAt is the real commit time. Test G21 no longer depends on speed. No source code changed, no money behaviour changed, nothing deployed, no flag changed."
+    },
+    {
       "version": "0.2.1",
       "status": "prepared, not deployed",
-      "preparedAt": "2026-11-22T00:00:00Z",
+      "preparedAt": "2026-11-22T10:28:22Z",
       "releasedAt": null,
       "notes": "Fix round after two independent audits of 0.2.0. Go-live plan (docs/GO-LIVE.md) now: says plainly that the owner's Rs 1 test runs only through an owner-only gate and shows a non-owner account is refused; lists the call to IT Services inside the database transaction (freezes everything for up to 4 seconds) with its risk and fix as a gate before customers; adds the webhook address check as a gate; corrects the rollback step for missing credits (repeat rail/confirm, not credit_purchase); says a pause also refuses payment confirmations; other wording fixes. Three more safety rules are now watched by tests (46 listed guards). The log cleaner now looks at the first 2000 characters only so a huge input cannot make it slow. No money behaviour changed, nothing deployed, no flag changed."
     },

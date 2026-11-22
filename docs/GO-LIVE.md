@@ -1,7 +1,7 @@
 # Go-live: Moneypenny (Priority 1)
 
 Plain words. Written for the owner (Rajat Agarwal) and for whoever carries out the steps.
-Version of this plan: Moneypenny 0.2.1 (documents the 0.2.0 go-live preparation). Nothing in this file has been done: no deploy, no merge, no real payment.
+Version of this plan: Moneypenny 0.2.2 (documents the 0.2.0 go-live preparation). Nothing in this file has been done: no deploy, no merge, no real payment.
 
 ## 1. The five facts you must know first
 
@@ -11,7 +11,7 @@ Version of this plan: Moneypenny 0.2.1 (documents the 0.2.0 go-live preparation)
 - **Today it is dark.** The live Worker (0.1.0) has no payment side wired. `buy_credits` answers `rail_not_configured` and makes no order. Nobody can be charged.
 - **The two money flags are not in this repo.** `PAY_VIA_MONEYPENNY` and `PAY_VIA_CONSOLE` live in the game / console projects. I searched this repo and found neither name. I could not see those projects, so I cannot show you where they are set. Both must be OFF now. The customer-facing meaning of OFF and the one narrow exception for the owner's own test are in section 4.
 - **Four things are not built yet and block the Rs 1 test** (section 8): the IT Services adapter inside Moneypenny, the IT Services payment page and webhook, the console's permanent order store, and an owner-only gate. Until they exist and are audited, the Rs 1 test cannot run. This plan does not pretend otherwise.
-- **Two known limits block opening payments to customers (step E5), even after the Rs 1 test passes** (section 8, items 1a and 1b): Moneypenny calls IT Services inside its one-at-a-time database transaction (up to 4 seconds of everything frozen), and the webhook address check looks at names only, not at the real address behind the name.
+- **Two known limits block opening payments to customers (step E5), even after the Rs 1 test passes** (section 8, items 1a and 1b): Moneypenny calls IT Services inside its one-at-a-time database transaction (up to 4 seconds of everything frozen for each call; the admin sweep can make up to 25 such calls in one transaction), and the webhook address check looks at names only, not at the real address behind the name.
 - **Release rule that applies to every step marked "code":** one writer per repo, one push, two independent audits on the exact SHA, deploy only after two `AUDIT: PASS`. Version is bumped in the same PR (see `KNOWLEDGE.md`).
 
 ## 2. How one purchase travels (so you can check each hop)
@@ -43,7 +43,7 @@ Never paste a value into chat, a ticket, a screenshot, a commit or a log. A pers
 - Key secrets are **not stored** anywhere: they are worked out from `MNP_MASTER_SECRET` and the key id. So changing the master secret **kills every key at once** and the setup call. Do not change it unless it leaked. If it leaked: change it, then issue all keys again (step C1).
 - The master secret for the live Worker is already set (STATE.md). Keep the owner's copy outside the repo.
 
-## 4. The flags (customer-reachable payment stays OFF until section 6 passes)
+## 4. The flags (no customer reaches payment until section 6 passes)
 
 - Names: `PAY_VIA_MONEYPENNY`, `PAY_VIA_CONSOLE`. Owner: the game and console projects.
 - **Rule (one rule, no exception for customers):** no customer can reach any payment until the owner's own Rs 1 payment passes every check in step D3, and the gates in section 8 (items 1a, 1b) are closed.
@@ -99,7 +99,7 @@ Never paste a value into chat, a ticket, a screenshot, a commit or a log. A pers
 - D1. Quiet time. Only the owner is online. **Check the gate before anything else:**
   1. The owner-only gate (section 8, item 3) is built and has two `AUDIT: PASS`. If not, stop: the test does not run.
   2. With the gate in place and before any payment, a **second, non-owner account** (a test account you control, not a customer) tries to buy. It must be refused, and no order must be created in Moneypenny. Write the result down. If that account can reach payment, turn the flag OFF at once and go to section 7.
-  3. Only then turn the flags ON, and only through the gate. Never turn a flag ON for everyone for this test.
+  3. Only then turn the flags ON, and only behind the gate. The gate sits **in front of the flag**: a customer's click must reach the gate first, and only the owner's e-mail is let through to where the flag is read. So while the flags are ON, every other person still gets "refused" and cannot reach payment. Never turn a flag ON for everyone for this test, and never rely on the flag alone.
 - D2. Owner opens the game, taps buy, lands on `console.corporatetambola.com`, pays Rs 1 on the Razorpay page with their own UPI or card.
 - D3. **Every one of these must be true** (any "no" means stop and go to section 7):
   1. Razorpay dashboard: exactly one payment of Rs 1.00, captured, on the IT Services account.
@@ -126,9 +126,9 @@ Never paste a value into chat, a ticket, a screenshot, a commit or a log. A pers
 
 - Section 9 checks, every day.
 
-## 6. When the flags may leave OFF
+## 6. When any customer may reach payment
 
-Only when D3 items 1 to 10 and D4 are all true on the same run, and the two audits of the exact deployed SHA were `AUDIT: PASS`. A partial pass is a fail. Passing the Rs 1 test is not enough for customers: the section 8 gates (items 1a and 1b) must also be closed before E5.
+No customer can reach payment until D3 items 1 to 10 and D4 pass on the same run. During D1 to D3 the flags are ON only behind the audited owner-only gate. The two audits of the exact deployed SHA must both be `AUDIT: PASS`. A partial pass is a fail. Passing the Rs 1 test is not enough for customers: the section 8 gates (items 1a and 1b) must also be closed before E5.
 
 ## 7. Rollback (fastest first)
 
@@ -152,8 +152,8 @@ What cannot be rolled back: ledger entries (by design) and Razorpay payments (re
 
 1. **IT Services adapter in Moneypenny: not built.** The Worker uses `unconfiguredRail`. The adapter must: create the order on IT Services once per `order_id` (a repeat returns the same order), return `{ rail_order_id, pay_url }` with an https `pay_url`, answer `health()` as `{ ok }`, and finish within 4 seconds. `railContract` in `src/rail.js` checks these. I did not write it because the IT Services interface is not visible to me and I will not invent it.
 1a. **GATE before E5: the call to IT Services runs inside the database transaction.** When a customer buys credits, Moneypenny asks IT Services to create the order while the one-at-a-time database transaction is open (`src/gate.js`, inside `db.tx` in `src/api.js`). Every request waits behind that one lock (`src/do.js`).
-   - **Risk:** a slow IT Services holds the lock for up to the 4-second limit. For that time every other call waits: `rail/confirm` for people who already paid, spending, balances. Anyone who can create orders can repeat this, because each new `order_ref` is a new order. It is harmless for the owner's own Rs 1 test (only the owner is online), which is why the test may pass with it open.
-   - **Mitigation:** move the call after the commit with the outbox that already exists (save the order, end the transaction, then call IT Services, retry on failure), and add a test that fails if the call is made inside the transaction. Until that is done, real traffic waits (E5 stays shut). A stop-gap, if the owner insists on earlier traffic, is a Cloudflare rate limit in front on `buy_credits`; it reduces but does not remove the risk.
+   - **Risk:** a slow IT Services holds the lock for up to the 4-second limit **per call**. The admin sweep (`POST /v1/admin/sweep`, `POST /v1/admin/rail/process`) runs up to 25 waiting rail calls one after another inside one transaction, so the worst case there is about 100 seconds. For that time every other call waits: `rail/confirm` for people who already paid, spending, balances. Anyone who can create orders can repeat this, because each new `order_ref` is a new order. It is harmless for the owner's own Rs 1 test (only the owner is online), which is why the test may pass with it open.
+   - **Mitigation:** move the call after the commit with the outbox that already exists (save the order, end the transaction, then call IT Services, retry on failure), and add a test that fails if any rail call (`create`, `instruct`, sweep, `rail/process`) is made inside the transaction. Until that is done, real traffic waits (E5 stays shut). A stop-gap, if the owner insists on earlier traffic, is a Cloudflare rate limit in front on `buy_credits`; it reduces but does not remove the risk.
    - `README.md` ("Known limits") already says this must be fixed before real traffic; the same applies to the rail `instruct` call, which is also inside the transaction.
 1b. **GATE before E5: the webhook address check is name-based.** The check on webhook addresses looks at the name only. The real event sender must also check the address the name resolves to, so a name cannot point at an internal address. Build that into the sender when it is built (item 5).
 2. **IT Services Pages + D1 side: not visible, not audited here.** It must check Razorpay's signature, tolerate repeated webhooks, and call `rail/confirm` with the exact paid amount in paise.
@@ -186,5 +186,7 @@ What cannot be rolled back: ledger entries (by design) and Razorpay payments (re
 - Open `/health` asks the payment rail at most once every 30 seconds.
 - `railContract`: a check every real payment rail adapter must pass.
 - `npm run guards` (about two minutes): removes each safety guard one at a time in a throw-away copy and demands that a test fails. **46 listed guards** are watched. It proves the listed guards only, not every check in the code. They cover: idempotency of money writes, whole numbers only, hash-chained append-only ledger, replay window and nonce, per-key rate limit, off-switches, console wallet price and key checks, log redaction, rail not configured, expiry on `reserve_item`, the money-refund off-switch.
+- **Known unwatched (two guards):** `src/spend.js` line 262 (`want > left`, a refund asks for more than is left on the hold) and line 224 (a captured hold cannot be released). If either is removed, no test fails. No extra money can leave: the later checks stop it (the `refunded + give <= amount` update at line 272, and the `status = 'held'` update at line 225). With line 262 removed, `hold.refunded_credits` could end above `credits`, which is a bookkeeping error only. They are not on the 46 listed guards and `npm run guards` does not check them.
 - New tests: `test/golive.test.js`, `test/rs1-chain.test.js`.
-- 0.2.1 (this fix round): docs only except one small code change, `redact` now looks at the first 2000 characters only (a test fails without it). Three more guards are listed and watched; no money behaviour changed.
+- 0.2.1: docs only except one small code change, `redact` now looks at the first 2000 characters only (a test fails without it). Three more guards are listed and watched; no money behaviour changed.
+- 0.2.2 (this fix round): docs and one test only, no source code change. Section 6 now says the same one rule as section 4; D1 step 3 says where the gate sits; the two unwatched guards are listed above; the lock-freeze wording now covers the admin sweep (about 100 seconds worst case).

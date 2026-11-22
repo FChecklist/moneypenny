@@ -360,11 +360,17 @@ test('G20. the money-refund off-switch (refund_money_enabled = 0) refuses a purc
 });
 
 test('G21. redact cuts the text to a safe length before it scans it (cost stays small for huge input)', () => {
-  const huge = 'a'.repeat(100000); // no space, no @: the worst case for the e-mail pattern (about 5 s before the fix)
-  const t0 = process.hrtime.bigint();
-  const out = redact(huge);
-  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  // Not timing-based: record how long the text is when each pattern runs. Without the cut the first pattern would get all 100000 characters.
+  const huge = 'a'.repeat(100000);
+  const seen = [];
+  const real = String.prototype.replace;
+  let out;
+  try {
+    String.prototype.replace = function (...a) { seen.push(this.length); return real.apply(this, a); };
+    out = redact(huge);
+  } finally { String.prototype.replace = real; }
   assert.equal(out.length <= 200, true);
-  assert.equal(ms < 300, true, `redact took ${ms} ms`);
+  assert.equal(seen.length >= 1, true, 'the patterns ran');
+  assert.equal(Math.max(...seen) <= 2000, true, `a pattern was run on ${Math.max(...seen)} characters`);
   assert.equal(redact('x'.repeat(5000) + ' a@example.com').includes('a@example.com'), false);
 });

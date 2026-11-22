@@ -3,7 +3,7 @@
 A small ledger that keeps **Moneypenny** for people: what they have, what they spent, what they earned.
 The currency name, unit word and symbol are tenant settings (default name "Moneypenny", label "moneypenny", symbol = the built-in coin icon). 100 credits = US$1 (also a setting). One balance on screen. Phase 0: runs on this laptop only. Nothing is live.
 
-**Status:** live as a dark Worker (0.1.0, no payment side, no money flowing). 0.2.1 is prepared and not deployed. No cash-out, no real accounts. Going live: see [docs/GO-LIVE.md](docs/GO-LIVE.md).
+**Status:** live as a dark Worker (0.1.0, no payment side, no money flowing). 0.2.2 is prepared and not deployed. No cash-out, no real accounts. Going live: see [docs/GO-LIVE.md](docs/GO-LIVE.md).
 The public name is one setting (`product_name`). The code name is MNP.
 
 Version history: see [CHANGELOG.md](CHANGELOG.md). Going live: [docs/GO-LIVE.md](docs/GO-LIVE.md).
