@@ -31,9 +31,11 @@ export function safeEqual(a, b) {
   return d === 0;
 }
 
-/** Text that is safe to write to a log: no e-mails, no long hex or token-like strings (signatures, secrets, hashes), no line breaks, at most 200 characters. */
+/** Text that is safe to write to a log: no e-mails, no long hex or token-like strings (signatures, secrets, hashes), no line breaks, at most 200 characters.
+ * It looks at the first 2000 characters only, so a huge input cannot make it slow. It is a best effort for library error text, not a filter for arbitrary data. */
 export function redact(text) {
   return String(text ?? '')
+    .slice(0, 2000)
     .replace(/[^\s@]+@[^\s@]+/g, '[email]')
     .replace(/[A-Fa-f0-9]{24,}/g, '[hex]')
     .replace(/[A-Za-z0-9_+\/=-]{32,}/g, '[long]')

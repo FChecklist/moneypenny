@@ -61,7 +61,10 @@ export const GUARDS = [
   ['kill-switch', 'the tenant kill switch stops everything but admin', 'src/api.js', "if (set.kill_switch && auth.scope !== 'admin') throw", 'if (false) throw'],
   ['hub-switch', 'the Hub off-switch is checked on every call', 'src/api.js', 'const stop = checkStatus(await app.status().catch(() => null), { op, method, scope: auth.scope });', 'const stop = null;'],
   ['rail-not-configured', 'with no payment side, buy_credits refuses', 'src/gate.js', "if (!ctx.rail || ctx.rail.name === 'not_configured') throw", 'if (false) throw'],
+  ['reserve-item-expiry', 'reserve_item (the game path) never spends expired credits', 'src/spend.js', "AND remaining > 0 AND (expires_at IS NULL OR expires_at > ?) AND eligible_at <= ?', ctx.tenantId, acc.id, now, now)\n    : [];\n  const canUseBonus", "AND remaining > 0 AND eligible_at <= ?', ctx.tenantId, acc.id, now)\n    : [];\n  const canUseBonus"],
+  ['refund-money-switch', 'the money-refund off-switch refuses a purchase refund', 'src/spend.js', "if (!s.refund_money_enabled) throw", 'if (false) throw'],
   // --- no secrets in logs
+  ['log-redact-cut', 'the log text is cut to a safe length before it is scanned', 'src/util.js', '    .slice(0, 2000)\n', ''],
   ['log-redact', 'error logs never carry e-mails or long secrets', 'src/api.js', "console.error('internal error', redact(e && e.message));", "console.error('internal error', e && e.message);"],
   // --- console wallet
   ['wallet-price', 'the console checks the order price equals the quoted pack price', 'packages/console-wallet/index.js', "if (r.body.fixed_price !== true || r.body.amount_minor !== q.body.inr_minor || r.body.credits !== credits) return fail('price_mismatch', 409);", ''],

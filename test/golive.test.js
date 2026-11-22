@@ -246,7 +246,7 @@ test('G12. logs: an internal error is written without e-mails, secrets or reques
   assert.equal(logged.length >= 1, true, 'the error was logged');
   const all = logged.join('\n');
   for (const bad of ['alice@example.com', secret, w.master, demo.api.key_id.length ? secret.slice(0, 24) : 'x', '\nline two']) assert.equal(all.includes(bad), false, `log leaked: ${bad.slice(0, 8)}...`);
-  assert.equal(redact('mail a@b.com and ' + 'f'.repeat(40) + ' ok'), 'mail [email] and [hex] ok');
+  assert.equal(redact('mail a@example.com and ' + 'f'.repeat(40) + ' ok'), 'mail [email] and [hex] ok');
   assert.equal(redact('token Zm9vYmFyYmF6cXV4Zm9vYmFyYmF6cXV4Zm9v end'), 'token [long] end');
 });
 
@@ -331,4 +331,40 @@ test('G18. the version is the same in package.json, version.json, CHANGELOG.md a
   assert.match(read('KNOWLEDGE.md'), new RegExp(`\\*\\*${pkg.replaceAll('.', '\\.')}\\*\\*`));
   // a version that is not deployed must say so and carry no invented release time or code id
   if (ver.status !== 'deployed') { assert.equal(ver.releasedAt, null); assert.equal(ver.commit, null); }
+});
+
+// ---- Guards found unwatched by audit 1 (PR 2): reserve_item expiry filter, money-refund off-switch, redact cost
+
+test('G19. reserve_item (the game path) never spends expired credits, even before the sweep runs', async () => {
+  const s = await setup();
+  await s.admin.put('/v1/admin/catalogue', { product: 'g', item: 'std', credits: 500 });
+  await buy(s.api, 'a@example.com', 1000, 'p-g19');
+  s.clock.t += 400 * 24 * 60 * MIN; // bought credits end after 365 days; the sweep has not run
+  const r = await s.api.post('/v1/spend/reserve_item', { email: 'a@example.com', product: 'g', item: 'std', order_ref: 'o-g19' });
+  assert.equal(r.status, 402);
+  assert.equal(r.body.error.code, 'insufficient_credits');
+  assert.equal(r.body.error.details?.usable_credits ?? r.body.error.usable_credits ?? 0, 0);
+  assert.deepEqual(await verifyBalances(s.ctx()), []);
+});
+
+test('G20. the money-refund off-switch (refund_money_enabled = 0) refuses a purchase refund and changes nothing', async () => {
+  const s = await setup();
+  await buy(s.api, 'a@example.com', 1000, 'p-g20');
+  assert.equal((await s.admin.put('/v1/admin/settings', { refund_money_enabled: 0 })).status, 200);
+  const before = (await s.db.first('SELECT COUNT(*) n FROM entry')).n;
+  const r = await s.api.pay.post('/v1/refund', { type: 'purchase', payment_ref: 'p-g20' });
+  assert.equal(r.status, 403);
+  assert.equal(r.body.error.code, 'refunds_off');
+  assert.equal((await s.db.first('SELECT COUNT(*) n FROM entry')).n, before, 'nothing was written');
+  assert.equal((await bal(s.api, 'a@example.com')).balance, 1000);
+});
+
+test('G21. redact cuts the text to a safe length before it scans it (cost stays small for huge input)', () => {
+  const huge = 'a'.repeat(100000); // no space, no @: the worst case for the e-mail pattern (about 5 s before the fix)
+  const t0 = process.hrtime.bigint();
+  const out = redact(huge);
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.equal(out.length <= 200, true);
+  assert.equal(ms < 300, true, `redact took ${ms} ms`);
+  assert.equal(redact('x'.repeat(5000) + ' a@example.com').includes('a@example.com'), false);
 });
