@@ -2,6 +2,18 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.7 (prepared 2026-11-25; NOT deployed yet)
+
+Round 4 fixes after audit of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- Read-only calls (`getPayee`, `listPayees`, `checkPayeeSecrets`, `secretPresence`) are never blocked by the setup check. Changes and routing calls still are, and the `payee_setup_incomplete` text now names the payee.
+- A stored `secret_names` that cannot be read counts as empty and is reported in the setup error; it no longer raises a raw error.
+- First fill of secret names on a payee with orders: name rules and the clash check still run (a secret name may belong to one payee only, retired included). Only the order lock is skipped, and only when the current names are empty.
+- New error `payee_gateway_taken` (409): a payee cannot be activated or resumed while another is active for the same gateway and mode. Pause or retire the first.
+- Migration 0005: the two back-fill UPDATEs have `WHERE payee_id IS NULL`; the legacy payee insert and route insert have `WHERE NOT EXISTS`.
+- `package-lock.json` removed (no dependencies; CI does not use it).
+- Contract file regenerated.
+
 ## 0.2.6 (prepared 2026-11-25; NOT deployed yet)
 
 Round 3 fixes after audit of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.

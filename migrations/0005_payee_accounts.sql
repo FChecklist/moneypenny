@@ -103,10 +103,11 @@ CREATE INDEX purchase_order_payee ON purchase_order (payee_id);
 
 -- Back-fill: the payee that exists today. Secret names are not known here (see owner check 2), so none are recorded.
 INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at, note)
-VALUES ('pay_legacy_itservices', 'IT Services by Rajat Agarwal', 'IT Services by Rajat Agarwal', 'razorpay', 'live', '{}', 'active', '["INR","USD"]', 1, 'migration', CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000, 'Payee in use before payee accounts existed.');
+SELECT 'pay_legacy_itservices', 'IT Services by Rajat Agarwal', 'IT Services by Rajat Agarwal', 'razorpay', 'live', '{}', 'active', '["INR","USD"]', 1, 'migration', CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000, 'Payee in use before payee accounts existed.'
+WHERE NOT EXISTS (SELECT 1 FROM payee_account WHERE payee_id = 'pay_legacy_itservices');
 
-UPDATE purchase_order SET payee_id = 'pay_legacy_itservices', payee_version = 1, mode = 'live';
-UPDATE verified_payment SET payee_id = 'pay_legacy_itservices';
+UPDATE purchase_order SET payee_id = 'pay_legacy_itservices', payee_version = 1, mode = 'live' WHERE payee_id IS NULL;
+UPDATE verified_payment SET payee_id = 'pay_legacy_itservices' WHERE payee_id IS NULL;
 
 INSERT INTO payee_route (route_id, tenant_id, product_id, payee_id, effective_from, set_by, reason, created_at)
-SELECT 'route_legacy_' || id, id, '*', 'pay_legacy_itservices', 0, 'migration', 'Back-fill: the payee in use before payee accounts existed.', CAST(strftime('%s','now') AS INTEGER) * 1000 FROM tenant;
+SELECT 'route_legacy_' || id, id, '*', 'pay_legacy_itservices', 0, 'migration', 'Back-fill: the payee in use before payee accounts existed.', CAST(strftime('%s','now') AS INTEGER) * 1000 FROM tenant WHERE NOT EXISTS (SELECT 1 FROM payee_route r WHERE r.route_id = 'route_legacy_' || tenant.id);

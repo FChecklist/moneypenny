@@ -93,7 +93,7 @@ test('F2-c: payee_exists for the same name or key name, same gateway and mode', 
   await P.createPayee(ctx, input());
   assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'payee b legal' }))), 'payee_exists');
   assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Different' }))), 'payee_exists'); // same key_id name
-  await P.createPayee(ctx, input({ mode: 'live' })); // other mode is a different payee
+  await P.createPayee(ctx, input({ mode: 'live', secret_names: { key_id: 'MNP_L_KEY_ID', key_secret: 'MNP_L_KEY_SECRET', webhook_secret: 'MNP_L_WEBHOOK' } })); // other mode is a different payee (own names)
 });
 
 test('F2-d: valid and invalid state moves', async () => {
@@ -375,7 +375,7 @@ test('R3-1: secret names of a retired payee stay reserved', async () => {
 
 test('R3-2: an active payee with empty secret names blocks every operation until an owner fills them in', async () => {
   const { s, ctx } = await reg({ env: { ...VALUES, MNP_LEGACY_KEY_ID: 'a1', MNP_LEGACY_KEY_SECRET: 'b2', MNP_LEGACY_WEBHOOK_SECRET: 'c3' } }, { fillLegacy: false });
-  for (const f of [() => P.createPayee(ctx, input()), () => P.listPayees(ctx), () => P.getPayee(ctx, 'pay_legacy_itservices'), () => P.pausePayee(ctx, 'pay_legacy_itservices'), () => P.editPayee(ctx, 'pay_legacy_itservices', { note: 'x' })]) {
+  for (const f of [() => P.createPayee(ctx, input()), () => P.pausePayee(ctx, 'pay_legacy_itservices'), () => P.editPayee(ctx, 'pay_legacy_itservices', { note: 'x' })]) {
     const e = await f().then(() => null, (x) => x);
     assert.equal(e?.code, 'payee_setup_incomplete');
     assert.match(e.message, /owner must fill in the secret names first/);
@@ -450,4 +450,92 @@ test('R3-4: strict digit rule everywhere, PIN and phone allowed only in three fi
   for (const v of bad) for (const f of loose(v)) assert.equal(await code(P.createPayee(ctx, input(f))), 'bank_detail_refused', v + JSON.stringify(f));
   // rule level
   assert.ok(P.BANK_RULES.digits('9876543210') && !P.BANK_RULES.digits('9876543210', true) && P.BANK_RULES.digits('12345678901', true));
+});
+
+// ---- round 4 ----
+const BAD_ENV = { MNP_LEGACY_KEY_ID: 'a1', MNP_LEGACY_KEY_SECRET: 'b2', MNP_LEGACY_WEBHOOK_SECRET: 'c3' };
+const N2 = { key_id: 'MNP_Z_KEY_ID', key_secret: 'MNP_Z_KEY_SECRET', webhook_secret: 'MNP_Z_WEBHOOK' };
+test('R4-1: read-only calls work while setup is incomplete; the error names the payee', async () => {
+  const { ctx } = await reg({ env: { ...VALUES, ...BAD_ENV } }, { fillLegacy: false });
+  assert.equal((await P.listPayees(ctx)).length, 1);
+  assert.equal((await P.getPayee(ctx, 'pay_legacy_itservices')).status, 'active');
+  assert.equal((await P.checkPayeeSecrets(ctx, 'pay_legacy_itservices')).ok, false);
+  assert.equal(P.secretPresence(ctx, {}).ok, false);
+  for (const f of [() => P.createPayee(ctx, input()), () => P.pausePayee(ctx, 'pay_legacy_itservices')]) {
+    const e = await f().then(() => null, (x) => x);
+    assert.equal(e?.code, 'payee_setup_incomplete');
+    assert.match(e.message, /pay_legacy_itservices/);
+    assert.match(e.message, /IT Services/);
+  }
+});
+
+test('R4-2: a corrupt secret_names row does not brick the registry', async () => {
+  const { s, ctx } = await reg({ env: { ...VALUES, ...BAD_ENV } }, { fillLegacy: false });
+  for (const bad of ['{not json', 'null', '[1]', '"x"']) {
+    await s.db.run("UPDATE payee_account SET secret_names = ? WHERE payee_id = 'pay_legacy_itservices'", bad);
+    assert.deepEqual((await P.listPayees(ctx))[0].secret_names, {});
+    const e = await P.createPayee(ctx, input()).then(() => null, (x) => x);
+    assert.equal(e?.code, 'payee_setup_incomplete'); // never a SyntaxError
+    assert.ok(e instanceof Error && !(e instanceof SyntaxError));
+  }
+  await s.db.run("UPDATE payee_account SET secret_names = '{bad' WHERE payee_id = 'pay_legacy_itservices'");
+  assert.match(await P.createPayee(ctx, input()).then(() => '', (x) => x.message), /unreadable/);
+  assert.equal((await P.checkPayeeSecrets(ctx, 'pay_legacy_itservices')).ok, false);
+  assert.deepEqual((await P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: LEGACY })).secret_names, LEGACY); // owner can repair it
+});
+
+test('R4-3: first fill on a payee with orders still runs the name rules and clash; only the lock is skipped', async () => {
+  const { s, ctx } = await reg({ env: { ...VALUES, ...BAD_ENV } }, { fillLegacy: false });
+  await addOrder(s, 'pay_legacy_itservices');
+  const other = await s.db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_o','Other','Other','stripe','test',?, 'retired','[\"INR\"]',1,'x',1,1)", JSON.stringify(N2));
+  assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: N2 })), 'payee_exists'); // retired payee's names
+  await s.db.run("UPDATE payee_account SET status = 'paused' WHERE payee_id = 'pay_o'");
+  assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: N2 })), 'payee_exists'); // live payee's names
+  assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: { ...LEGACY, key_id: 'rzp_live_abc' } })), 'secret_value_refused'); // name rules
+  assert.deepEqual((await P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: LEGACY })).secret_names, LEGACY); // clean fill works despite the order
+  assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: NAMES })), 'identity_locked'); // lock back on once filled
+});
+
+test('R4-4: a second payee cannot go active for the same gateway and mode', async () => {
+  const { ctx } = await reg();
+  Object.assign(ctx.env, { MNP_Z_KEY_ID: 'v', MNP_Z_KEY_SECRET: 'v', MNP_Z_WEBHOOK: 'v' });
+  const a = await mkActive(ctx); // razorpay test
+  const b = await P.createPayee(ctx, input({ legal_name: 'Second', secret_names: N2 }));
+  assert.equal(await code(P.activatePayee(ctx, b.payee_id)), 'payee_gateway_taken');
+  const live = await P.createPayee(ctx, input({ legal_name: 'Live', mode: 'live', secret_names: { key_id: 'MNP_L_KEY_ID', key_secret: 'MNP_L_KEY_SECRET', webhook_secret: 'MNP_L_WEBHOOK' } }));
+  ctx.env.MNP_L_KEY_ID = ctx.env.MNP_L_KEY_SECRET = ctx.env.MNP_L_WEBHOOK = 'v'; // other mode: not blocked by a (test mode) active payee... but legacy is live
+  assert.equal(await code(P.activatePayee(ctx, live.payee_id)), 'payee_gateway_taken'); // legacy is active razorpay live
+  await P.pausePayee(ctx, a.payee_id);
+  assert.equal((await P.activatePayee(ctx, b.payee_id)).status, 'active'); // switch by pausing the first
+  assert.equal(await code(P.activatePayee(ctx, a.payee_id)), 'payee_gateway_taken'); // resume is blocked too
+  await P.retirePayee(ctx, b.payee_id);
+  assert.equal((await P.activatePayee(ctx, a.payee_id)).status, 'active');
+});
+
+test('R4-5: no lockfile is needed (no dependencies)', async () => {
+  const { readFileSync, existsSync } = await import('node:fs');
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.ok(!pkg.dependencies && !pkg.devDependencies);
+  assert.ok(!existsSync(new URL('../package-lock.json', import.meta.url)));
+});
+
+test('R4-6: the guarded back-fill can be re-run on a migrated copy without duplicating or rewriting', async () => {
+  const { readFileSync } = await import('node:fs');
+  const db = mkDb();
+  migrate(db, old());
+  await db.run("INSERT INTO tenant (id, name, created_at) VALUES ('t1','One',1)");
+  await db.run("INSERT INTO account (id, tenant_id, email_norm, email_canon, created_at) VALUES ('a1','t1','a@x.com','a@x.com',1)");
+  await db.run("INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, status, created_at, updated_at) VALUES ('o1','t1','a1','r1',100,'USD',100,1,1,1,'paid',1,1)");
+  migrate(db, MIGRATIONS);
+  // after migration an owner edits things the back-fill must never touch again
+  await db.run("UPDATE payee_account SET secret_names = '{\"k\":1}', note = 'edited' WHERE payee_id = 'pay_legacy_itservices'");
+  await db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_n','N','N','stripe','test','{}','draft','[\"INR\"]',1,'x',1,1)");
+  await db.run("UPDATE purchase_order SET payee_id = 'pay_n', mode = 'test', payee_version = 7 WHERE id = 'o1'");
+  const sql = readFileSync(new URL('../migrations/0005_payee_accounts.sql', import.meta.url), 'utf8');
+  db.exec(sql.slice(sql.indexOf('-- Back-fill')));
+  assert.equal((await db.first("SELECT COUNT(*) n FROM payee_account WHERE payee_id = 'pay_legacy_itservices'")).n, 1);
+  assert.equal((await db.first("SELECT note FROM payee_account WHERE payee_id = 'pay_legacy_itservices'")).note, 'edited');
+  const o = await db.first("SELECT payee_id, mode, payee_version FROM purchase_order WHERE id = 'o1'");
+  assert.deepEqual({ ...o }, { payee_id: 'pay_n', mode: 'test', payee_version: 7 });
+  assert.equal((await db.first('SELECT COUNT(*) n FROM payee_route')).n, 1);
 });

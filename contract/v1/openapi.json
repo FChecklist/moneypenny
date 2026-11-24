@@ -324,6 +324,10 @@
       "status": 403,
       "meaning": "Only the owner can change a payee."
     },
+    "payee_gateway_taken": {
+      "status": 409,
+      "meaning": "Another payee is active for this gateway and mode. Pause or retire it first."
+    },
     "payee_not_found": {
       "status": 404,
       "meaning": "No such payee."
@@ -338,7 +342,7 @@
     },
     "payee_setup_incomplete": {
       "status": 409,
-      "meaning": "An active payee has no secret names. An owner must fill in the secret names first."
+      "meaning": "An active payee has no secret names. An owner must fill in the secret names first. Payee: …."
     },
     "payees_disabled": {
       "status": 503,

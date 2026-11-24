@@ -1,15 +1,22 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-25T00:00:00Z",
-  "preparedAtIST": "2026-11-25T03:00:00+05:30",
+  "preparedAt": "2026-11-25T02:00:00Z",
+  "preparedAtIST": "2026-11-25T07:30:00+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.7",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T02:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 4 audit fixes on payee accounts F1-F2, dark. Read-only calls (get, list, check secrets, secret presence) are never blocked by the setup check, so the owner can see the problem; changes and routing calls still are, and the error names the payee. An unreadable stored secret_names counts as empty and is reported, never a raw error. The first fill of secret names on a payee with orders still runs the name rules and the clash check (a secret name may belong to one payee only, retired included); only the order lock is skipped. Activating or resuming a payee is refused (payee_gateway_taken, 409) while another payee is active for the same gateway and mode. Migration 0005 back-fill statements are guarded so a partial re-run cannot duplicate or rewrite. The unused package-lock.json is removed (no dependencies, CI does not use it). No money behaviour changed, nothing deployed, no flag changed."
+    },
     {
       "version": "0.2.6",
       "status": "prepared, not deployed",

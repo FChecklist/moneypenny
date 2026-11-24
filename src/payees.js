@@ -15,14 +15,34 @@ const TEXT = ['display_name', 'checkout', 'invoice', 'note'];
 const NAME_RE = /^[A-Z][A-Z0-9_]{2,63}$/;
 
 export const payeesEnabled = (ctx) => ctx.payees === true || ctx.env?.MNP_PAYEE_ACCOUNTS === '1';
-const gate = async (ctx, fillId) => {
+// A stored secret_names that cannot be read counts as empty. It never raises a raw SyntaxError.
+const parseNames = (raw) => {
+  try {
+    const v = JSON.parse(raw || '{}');
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+};
+const badNames = (raw) => {
+  try {
+    const v = JSON.parse(raw || '{}');
+    return !(v && typeof v === 'object' && !Array.isArray(v));
+  } catch {
+    return true;
+  }
+};
+// Read-only calls (readOnly) only need the flag, so the owner can still look at the registry to see a setup problem.
+// Changes and routing calls are also refused while an active payee has no usable secret names.
+const gate = async (ctx, fillId, readOnly = false) => {
   if (!payeesEnabled(ctx)) throw new ApiError(503, 'payees_disabled', 'Payee accounts are not turned on.');
-  // An active payee with no secret names cannot be paused and resumed, so nothing runs until an owner fills them in.
+  if (readOnly) return;
   // The one way out: an owner edit that sets only the secret names of such a payee (fillId).
-  const rows = await ctx.db.all("SELECT payee_id, secret_names FROM payee_account WHERE status = 'active'");
-  const empty = rows.filter((r) => !Object.keys(JSON.parse(r.secret_names || '{}') || {}).length);
+  const rows = await ctx.db.all("SELECT payee_id, legal_name, secret_names FROM payee_account WHERE status = 'active'");
+  const empty = rows.filter((r) => !Object.keys(parseNames(r.secret_names)).length);
   if (empty.length && !(fillId && empty.every((r) => r.payee_id === fillId))) {
-    throw new ApiError(409, 'payee_setup_incomplete', 'An active payee has no secret names. An owner must fill in the secret names first.');
+    const who = empty.map((r) => `${r.legal_name} (${r.payee_id})${badNames(r.secret_names) ? ' [stored secret names are unreadable]' : ''}`).join(', ');
+    throw new ApiError(409, 'payee_setup_incomplete', `An active payee has no secret names. An owner must fill in the secret names first. Payee: ${who}.`);
   }
 };
 // Every change needs the owner role: ctx.callerType === 'owner' (the repo's existing caller type, set only by
@@ -149,7 +169,7 @@ const validators = {
 const view = (r) =>
   r && {
     payee_id: r.payee_id, legal_name: r.legal_name, display_name: r.display_name, gateway: r.gateway, mode: r.mode,
-    secret_names: JSON.parse(r.secret_names), status: r.status, currencies: JSON.parse(r.currencies),
+    secret_names: parseNames(r.secret_names), status: r.status, currencies: JSON.parse(r.currencies),
     checkout: JSON.parse(r.checkout), invoice: JSON.parse(r.invoice), version: r.version,
     created_by: r.created_by, created_at: r.created_at, updated_at: r.updated_at, retired_at: r.retired_at, note: r.note,
   };
@@ -182,13 +202,15 @@ async function clash(ctx, p, exceptId) {
   const rows = await ctx.db.all("SELECT payee_id, legal_name, gateway, mode, secret_names, status FROM payee_account WHERE payee_id != ?", exceptId ?? '');
   const mine = new Set(Object.values(p.secret_names));
   for (const r of rows) {
-    // The secret names of a retired payee stay reserved for good (any gateway, mode or role).
-    if (r.status === 'retired' && Object.values(JSON.parse(r.secret_names)).some((n) => mine.has(n))) {
-      throw new ApiError(409, 'payee_exists', 'A secret name was used by a retired payee. A retired payee\'s secret names can never be used again.');
+    const theirs = parseNames(r.secret_names);
+    // A secret name belongs to one payee only. The names of a retired payee stay reserved for good.
+    if (Object.values(theirs).some((n) => mine.has(n))) {
+      if (r.status === 'retired') throw new ApiError(409, 'payee_exists', 'A secret name was used by a retired payee. A retired payee\'s secret names can never be used again.');
+      throw new ApiError(409, 'payee_exists', 'A secret name already belongs to another payee.');
     }
     if (r.status === 'retired') continue;
     const same = r.gateway === p.gateway && r.mode === p.mode;
-    if (same && (r.legal_name.toLowerCase() === p.legal_name.toLowerCase() || JSON.parse(r.secret_names).key_id === p.secret_names.key_id)) {
+    if (same && r.legal_name.toLowerCase() === p.legal_name.toLowerCase()) {
       throw new ApiError(409, 'payee_exists', 'A payee with the same name or key name already exists for this gateway and mode.');
     }
   }
@@ -221,11 +243,11 @@ export async function createPayee(ctx, input = {}) {
 }
 
 export async function getPayee(ctx, id) {
-  await gate(ctx);
+  await gate(ctx, undefined, true);
   return view(await load(ctx, id));
 }
 export async function listPayees(ctx) {
-  await gate(ctx);
+  await gate(ctx, undefined, true);
   return (await ctx.db.all('SELECT * FROM payee_account ORDER BY created_at, payee_id')).map(view);
 }
 
@@ -243,8 +265,8 @@ export async function editPayee(ctx, id, changes = {}) {
     const cur = await load(c, id);
     if (cur.status === 'retired') throw new ApiError(409, 'payee_retired', 'A retired payee cannot be changed.');
     if (clean.mode !== undefined && clean.mode !== cur.mode) throw new ApiError(409, 'mode_fixed', 'The mode is fixed at creation. Make a new payee.');
-    const identityKeys = keys.filter((k) => IDENTITY.includes(k) && JSON.stringify(clean[k]) !== JSON.stringify(k === 'secret_names' || k === 'currencies' ? JSON.parse(cur[k]) : cur[k]));
-    const filling = identityKeys.join() === 'secret_names' && !Object.keys(JSON.parse(cur.secret_names || '{}')).length; // first fill-in is not a change of a name
+    const identityKeys = keys.filter((k) => IDENTITY.includes(k) && JSON.stringify(clean[k]) !== JSON.stringify(k === 'secret_names' ? parseNames(cur[k]) : k === 'currencies' ? JSON.parse(cur[k]) : cur[k]));
+    const filling = identityKeys.join() === 'secret_names' && !Object.keys(parseNames(cur.secret_names)).length; // first fill-in is not a change of a name. Only the lock is skipped: name rules and clash still run.
     if (identityKeys.length && !filling && (await hasOrders(c, id))) throw new ApiError(409, 'identity_locked', 'This payee has had an order. Name, gateway, secret names and currencies cannot change. Make a new payee.');
     const next = { ...view(cur), ...clean };
     if (identityKeys.length) await clash(c, next, id);
@@ -268,8 +290,11 @@ async function move(ctx, id, to) {
     const cur = await load(c, id);
     if (!MOVES[cur.status].includes(to)) throw new ApiError(409, 'bad_transition', `A ${cur.status} payee cannot become ${to}.`);
     if (to === 'active') {
-      const s = secretPresence(ctx, JSON.parse(cur.secret_names));
+      const s = secretPresence(ctx, parseNames(cur.secret_names));
       if (!s.ok) throw new ApiError(409, 'payee_secret_missing', 'A secret name is not in the platform store.', { missing: s.missing });
+      // One payee, one gateway: pause or retire the active one first.
+      const taken = await db.first("SELECT 1 x FROM payee_account WHERE status = 'active' AND gateway = ? AND mode = ? AND payee_id != ? LIMIT 1", cur.gateway, cur.mode, id);
+      if (taken) throw new ApiError(409, 'payee_gateway_taken', 'Another payee is active for this gateway and mode. Pause or retire it first.');
     }
     const ts = ctx.now();
     await db.run('UPDATE payee_account SET status = ?, version = version + 1, updated_at = ?, retired_at = ? WHERE payee_id = ?', to, ts, to === 'retired' ? ts : null, id);
@@ -284,7 +309,7 @@ export const retirePayee = (ctx, id) => move(ctx, id, 'retired');
 
 /** Read-only check, safe to show: which names are present. Never a value. */
 export async function checkPayeeSecrets(ctx, id) {
-  await gate(ctx);
-  const r = secretPresence(ctx, JSON.parse((await load(ctx, id)).secret_names));
+  await gate(ctx, undefined, true);
+  const r = secretPresence(ctx, parseNames((await load(ctx, id)).secret_names));
   return { payee_id: id, ok: r.ok, found: r.found, missing: r.missing };
 }
