@@ -312,6 +312,10 @@
       "status": 409,
       "meaning": "A payee with the same name or key name already exists for this gateway and mode."
     },
+    "payee_forbidden": {
+      "status": 403,
+      "meaning": "Only the owner can change a payee."
+    },
     "payee_not_found": {
       "status": 404,
       "meaning": "No such payee."

@@ -2,13 +2,24 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.4 (prepared 2026-11-25T03:00:00 IST; NOT deployed yet)
+
+Fix round after two audits of 0.2.3 (payee accounts F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- Audit rows: create, edit, activate, pause, resume and retire each write one `payee_audit` row (who, action, before and after, secret NAMES only) in the same transaction. A failed change leaves none.
+- Owner only: every change needs `ctx.callerType === 'owner'` and a real actor name. Others get `payee_forbidden` (403, added to the contract). Reads stay open.
+- Free text in `checkout`, `invoice`, `note` and `display_name` is screened for pasted secrets (`rzp_` text, long hex, long base64-like runs, `sk_`/`whsec_` style). Refused with `secret_value_refused`; the text is never echoed.
+- `secretPresence`: when `ctx.secrets` is present it replaces `ctx.env`. Now written in the code and tested.
+- Contract file `contract/v1/openapi.json` was out of date; it is regenerated now and a test fails if it drifts.
+- OWNER CHECK before migration 0005 runs on production: (1) the old tables have no test or demo marker, so every old order and payment stays mode `live`; check there is no test-mode order or payment in production. (2) The Razorpay secret names are in the IT Services repo, not here, so the legacy payee keeps no secret names; pause then activate on it fails with `payee_secret_missing` until the owner sets the three names. Both are written in the migration header.
+
 ## 0.2.3 (prepared 2026-11-25T02:25:12 IST; NOT deployed yet)
 
 Payee accounts, chunks F1 and F2 of the payee design. Dark: nothing calls the new code and the flag `MNP_PAYEE_ACCOUNTS` is off by default. Live code is still 0.1.0. No money behaviour changed, no flag changed, nothing deployed.
 
 - Migration `0005_payee_accounts.sql`: tables `payee_account`, `payee_route`, `payee_change`, `payee_audit`, `payee_event`, `reconcile_run`; new columns on `purchase_order` and `verified_payment`. Back-fill: every old order and payment points at `pay_legacy_itservices`, and every tenant gets a `*` route to it. The `lot` and `entry` tables are untouched.
 - `src/payees.js`: create, edit, state machine, identity lock, validators, secret-name check. Only secret NAMES are stored; a pasted value is refused and never echoed.
-- `contract/v1/openapi.json` regenerated (new error codes only).
+- `contract/v1/openapi.json`: new error codes (this file was not actually regenerated in 0.2.3; fixed in 0.2.4).
 - Not in this step: routing, order snapshot, adapters, owner key, audit writes for payee changes, health (F3 to F9).
 
 ## 0.2.2 (prepared 2026-11-22T16:25:21 IST; NOT deployed yet)

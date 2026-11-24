@@ -3,7 +3,7 @@
 // DARK: every call refuses with 503 payees_disabled unless the flag MNP_PAYEE_ACCOUNTS is '1'
 // (env) or ctx.payees === true (tests). The flag defaults off, and nothing else calls this file yet.
 // Secrets: only the NAMES of platform secrets are stored. A value is refused. Responses never carry a value.
-import { ApiError, newId } from './util.js';
+import { ApiError, newId, sha256Hex } from './util.js';
 
 export const STATUSES = ['draft', 'active', 'paused', 'retired'];
 export const MOVES = { draft: ['active'], active: ['paused', 'retired'], paused: ['active', 'retired'], retired: [] };
@@ -18,6 +18,24 @@ export const payeesEnabled = (ctx) => ctx.payees === true || ctx.env?.MNP_PAYEE_
 const gate = (ctx) => {
   if (!payeesEnabled(ctx)) throw new ApiError(503, 'payees_disabled', 'Payee accounts are not turned on.');
 };
+// Every change needs the owner role: ctx.callerType === 'owner' (the repo's existing caller type, set only by
+// the code that builds the context, never by a request). The actor must be a real name, not 'system'.
+const ownerOnly = (ctx) => {
+  if (ctx.callerType !== 'owner' || !ctx.actor || ctx.actor === 'system') throw new ApiError(403, 'payee_forbidden', 'Only the owner can change a payee.');
+};
+
+/** One hash-chained payee_audit row, written in the caller's transaction. Never a secret value: secret_names holds NAMES only. */
+const SAFE = ['legal_name', 'display_name', 'gateway', 'mode', 'status', 'currencies', 'checkout', 'invoice', 'secret_names', 'note', 'version'];
+const snap = (r) => r && Object.fromEntries(SAFE.map((k) => [k, view(r)[k]]));
+async function auditRow(ctx, db, action, payeeId, before, after) {
+  const last = await db.first('SELECT seq, hash FROM payee_audit ORDER BY seq DESC LIMIT 1');
+  const seq = (last?.seq ?? 0) + 1;
+  const prev = last?.hash ?? 'GENESIS';
+  const ts = ctx.now();
+  const d = JSON.stringify({ payee_id: payeeId, before: snap(before), after: snap(after) });
+  const hash = await sha256Hex(JSON.stringify([seq, ts, ctx.actor, action, d, prev, ctx.keyId || null]));
+  await db.run('INSERT INTO payee_audit (seq, ts, actor, key_id, action, detail, change_id, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?)', seq, ts, ctx.actor, ctx.keyId || null, action, d, null, prev, hash);
+}
 
 /** A secret NAME looks like MNP_PAYEE_X_KEY_SECRET. Anything that looks like a secret VALUE is refused (the text is never echoed). */
 export function checkSecretName(v, field) {
@@ -35,12 +53,15 @@ function names(v) {
   if (new Set(Object.values(out)).size !== 3) throw new ApiError(400, 'bad_secret_names', 'The three secret names must differ.');
   return out;
 }
+/** Same value detection as checkSecretName, for free text: long hex or base64-like runs, rzp_ text, key-like words. Never echoes the text. */
+const looksSecret = (t) => /rzp_/i.test(t) || /[A-Fa-f0-9]{32,}/.test(t) || /[A-Za-z0-9+/_=-]{32,}/.test(t) || /\b(?:sk|pk|rk|whsec)_[A-Za-z0-9]{8,}/i.test(t);
 const text = (v, field, { max = 200, req = false } = {}) => {
   if (v == null || v === '') {
     if (req) throw new ApiError(400, 'bad_field', `${field} is needed.`);
     return null;
   }
   if (typeof v !== 'string' || v.length > max) throw new ApiError(400, 'bad_field', `${field} must be text of at most ${max} characters.`);
+  if (looksSecret(v)) throw new ApiError(400, 'secret_value_refused', `${field} looks like a secret value. Never paste a secret value.`);
   return v.trim();
 };
 function currencies(v) {
@@ -120,6 +141,7 @@ async function clash(ctx, p, exceptId) {
 
 export async function createPayee(ctx, input = {}) {
   gate(ctx);
+  ownerOnly(ctx);
   if (!input || typeof input !== 'object') throw new ApiError(400, 'bad_field', 'Body must be an object.');
   for (const k of Object.keys(input)) if (![...IDENTITY, ...TEXT].includes(k)) throw new ApiError(400, 'bad_field', `${k} is not a payee field.`);
   const p = {};
@@ -137,7 +159,9 @@ export async function createPayee(ctx, input = {}) {
       'INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, checkout, invoice, version, created_by, created_at, updated_at, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
       id, p.legal_name, p.display_name, p.gateway, p.mode, JSON.stringify(p.secret_names), 'draft', JSON.stringify(p.currencies), JSON.stringify(p.checkout), JSON.stringify(p.invoice), 1, ctx.actor || 'system', ts, ts, p.note,
     );
-    return view(await load(c, id));
+    const row = await load(c, id);
+    await auditRow(ctx, db, 'payee.create', id, null, row);
+    return view(row);
   });
 }
 
@@ -152,6 +176,7 @@ export async function listPayees(ctx) {
 
 export async function editPayee(ctx, id, changes = {}) {
   gate(ctx);
+  ownerOnly(ctx);
   if (!changes || typeof changes !== 'object') throw new ApiError(400, 'bad_field', 'Body must be an object.');
   for (const k of Object.keys(changes)) if (![...IDENTITY, ...TEXT].includes(k)) throw new ApiError(400, 'bad_field', `${k} is not a payee field.`);
   const keys = Object.keys(changes);
@@ -172,13 +197,16 @@ export async function editPayee(ctx, id, changes = {}) {
     if (!changed.length) return view(cur);
     const ser = (k) => (['secret_names', 'currencies', 'checkout', 'invoice'].includes(k) ? JSON.stringify(clean[k]) : clean[k]);
     await db.run(`UPDATE payee_account SET ${changed.map((k) => `${k} = ?`).join(', ')}, version = version + 1, updated_at = ? WHERE payee_id = ?`, ...changed.map(ser), ctx.now(), id);
-    return view(await load(c, id));
+    const row = await load(c, id);
+    await auditRow(ctx, db, 'payee.edit', id, cur, row);
+    return view(row);
   });
 }
 
 /** One move of the state machine. Activate needs all three secret names present in the platform store. */
 async function move(ctx, id, to) {
   gate(ctx);
+  ownerOnly(ctx);
   return ctx.db.tx(async (db) => {
     const c = { ...ctx, db };
     const cur = await load(c, id);
@@ -189,7 +217,9 @@ async function move(ctx, id, to) {
     }
     const ts = ctx.now();
     await db.run('UPDATE payee_account SET status = ?, version = version + 1, updated_at = ?, retired_at = ? WHERE payee_id = ?', to, ts, to === 'retired' ? ts : null, id);
-    return view(await load(c, id));
+    const row = await load(c, id);
+    await auditRow(ctx, db, `payee.${to === 'active' ? (cur.status === 'paused' ? 'resume' : 'activate') : to === 'paused' ? 'pause' : 'retire'}`, id, cur, row);
+    return view(row);
   });
 }
 export const activatePayee = (ctx, id) => move(ctx, id, 'active'); // also the resume from paused

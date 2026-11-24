@@ -15,7 +15,7 @@ const VALUES = { MNP_PAYEE_B_KEY_ID: 'rzp_' + 'test_AbCdEfGhIjKlMnOp', MNP_PAYEE
 const input = (o = {}) => ({ legal_name: 'Payee B Legal', gateway: 'razorpay', mode: 'test', secret_names: NAMES, currencies: ['INR'], ...o });
 const reg = async (extra = {}) => {
   const s = await setup();
-  return { s, ctx: { ...s.ctx(), payees: true, actor: 'owner', env: { ...VALUES }, ...extra } };
+  return { s, ctx: { ...s.ctx(), payees: true, actor: 'owner', callerType: 'owner', env: { ...VALUES }, ...extra } };
 };
 const code = (p) => assert.rejects(p, (e) => (code.last = e.code) && true).then(() => code.last);
 const addOrder = async (s, payeeId) => {
@@ -167,4 +167,86 @@ test('F2-h: no response, error or stored row carries a secret value', async () =
   seen.push(await s.db.all('SELECT * FROM payee_account'));
   const all = JSON.stringify(seen);
   for (const v of Object.values(VALUES)) assert.ok(!all.includes(v), v);
+});
+
+const audits = (s) => s.db.all('SELECT * FROM payee_audit ORDER BY seq');
+
+test('F2-i: every mutator writes exactly one audit row; a failed change writes none', async () => {
+  const { s, ctx } = await reg();
+  const p = await P.createPayee(ctx, input());
+  assert.equal((await audits(s)).length, 1);
+  await P.editPayee(ctx, p.payee_id, { note: 'hello' });
+  await P.activatePayee(ctx, p.payee_id);
+  await P.pausePayee(ctx, p.payee_id);
+  await P.activatePayee(ctx, p.payee_id);
+  await P.retirePayee(ctx, p.payee_id);
+  const rows = await audits(s);
+  assert.deepEqual(rows.map((r) => r.action), ['payee.create', 'payee.edit', 'payee.activate', 'payee.pause', 'payee.resume', 'payee.retire']);
+  assert.ok(rows.every((r) => r.actor === 'owner'));
+  const edit = JSON.parse(rows[1].detail);
+  assert.equal(edit.before.note, null);
+  assert.equal(edit.after.note, 'hello');
+  assert.deepEqual(edit.after.secret_names, NAMES); // names only
+  for (const v of Object.values(VALUES)) assert.ok(!JSON.stringify(rows).includes(v));
+  const n = rows.length;
+  await code(P.pausePayee(ctx, p.payee_id)); // retired: refused
+  await code(P.editPayee(ctx, p.payee_id, { note: 'x' }));
+  await code(P.createPayee(ctx, input({ legal_name: '' })));
+  assert.equal((await audits(s)).length, n);
+});
+
+test('F2-j: a failed audit write rolls the change back', async () => {
+  const { s, ctx } = await reg();
+  const p = await P.createPayee(ctx, input());
+  await s.db.run('DROP TABLE payee_audit');
+  await assert.rejects(P.editPayee(ctx, p.payee_id, { note: 'z' }));
+  await s.db.run('CREATE TABLE payee_audit (seq INTEGER PRIMARY KEY, ts INTEGER NOT NULL, actor TEXT NOT NULL, key_id TEXT, action TEXT NOT NULL, detail TEXT NOT NULL, change_id TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL)');
+  assert.equal((await P.getPayee(ctx, p.payee_id)).note, null);
+});
+
+test('F2-k: only the owner role may change a payee', async () => {
+  const { s, ctx } = await reg();
+  const p = await P.createPayee(ctx, input());
+  for (const bad of [{ callerType: 'human' }, { callerType: undefined }, { actor: 'system' }, { actor: undefined }, { callerType: 'ai' }]) {
+    const c = { ...ctx, ...bad };
+    assert.equal(await code(P.createPayee(c, input({ legal_name: 'Other' }))), 'payee_forbidden');
+    assert.equal(await code(P.editPayee(c, p.payee_id, { note: 'n' })), 'payee_forbidden');
+    for (const f of [P.activatePayee, P.pausePayee, P.retirePayee]) assert.equal(await code(f(c, p.payee_id)), 'payee_forbidden');
+  }
+  assert.equal((await audits(s)).length, 1);
+  assert.equal((await P.getPayee({ ...ctx, callerType: 'human' }, p.payee_id)).payee_id, p.payee_id); // reads stay open
+});
+
+test('F2-l: free text values are screened like secret names', async () => {
+  const { ctx } = await reg();
+  const bad = ['rzp_' + 'live_AbCdEf12', 'a'.repeat(5) + 'f'.repeat(40), 'QWxhZGRpbjpvcGVuIHNlc2FtZQQWxhZGRpbjpvcGVuIHNlc2FtZQ==', 'whsec_' + 'abcdefgh12345'];
+  for (const v of bad) {
+    assert.equal(await code(P.createPayee(ctx, input({ invoice: { footer: v } }))), 'secret_value_refused');
+    assert.equal(await code(P.createPayee(ctx, input({ checkout: { description: v } }))), 'secret_value_refused');
+    assert.equal(await code(P.createPayee(ctx, input({ note: v }))), 'secret_value_refused');
+  }
+  const p = await P.createPayee(ctx, input({ invoice: { footer: 'Thank you for your business. GST invoice.' } }));
+  for (const v of bad) {
+    const e = await code(P.editPayee(ctx, p.payee_id, { invoice: { footer: v } }));
+    assert.equal(e, 'secret_value_refused');
+    assert.ok(!String(code.last.message).includes(v));
+  }
+});
+
+test('F2-m: ctx.secrets, when present, replaces ctx.env', async () => {
+  const names = NAMES;
+  const all = new Map(Object.entries(VALUES));
+  assert.equal(P.secretPresence({ env: { ...VALUES } }, names).ok, true);
+  assert.equal(P.secretPresence({ env: { ...VALUES }, secrets: new Map() }, names).ok, false); // env ignored
+  assert.equal(P.secretPresence({ env: {}, secrets: all }, names).ok, true);
+});
+
+test('F1-d: migration header and contract carry the owner checks and payee_forbidden', async () => {
+  const { readFileSync } = await import('node:fs');
+  const sql = readFileSync(new URL('../migrations/0005_payee_accounts.sql', import.meta.url), 'utf8');
+  assert.match(sql, /OWNER CHECKS BEFORE THIS RUNS ON PRODUCTION/);
+  const { buildContract } = await import('../scripts/gen-contract.js');
+  const file = JSON.parse(readFileSync(new URL('../contract/v1/openapi.json', import.meta.url), 'utf8'));
+  assert.match(JSON.stringify(file), /"payee_forbidden":\{"status":403/);
+  assert.deepEqual(file, JSON.parse(JSON.stringify(buildContract())));
 });

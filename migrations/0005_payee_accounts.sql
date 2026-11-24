@@ -1,3 +1,10 @@
+-- OWNER CHECKS BEFORE THIS RUNS ON PRODUCTION (both found by audit, neither can be settled from this repo):
+-- 1. Mode. No table carries a test or demo marker (purchase_order and verified_payment have no such column, and
+--    the tenant table has none). So every old order and payment is back-filled as 'live'. Check that no test-mode
+--    order or payment exists in production. If one does, set its mode to 'test' by hand after this migration.
+-- 2. Secret names. The Razorpay code is in the IT Services repo, not here, so the real secret NAMES are not known.
+--    The legacy payee keeps secret_names '{}'. Until the owner sets the three real names, pause then activate on it
+--    answers payee_secret_missing. Fill the names (names only, never values) before the registry is turned on.
 -- Payee accounts: who receives the real money. A side record only. Credits, lots, entries, holds and the chain never read these tables.
 CREATE TABLE payee_account (
   payee_id TEXT PRIMARY KEY,
@@ -94,7 +101,7 @@ ALTER TABLE purchase_order ADD COLUMN payee_snapshot TEXT;
 ALTER TABLE verified_payment ADD COLUMN payee_id TEXT REFERENCES payee_account(payee_id);
 CREATE INDEX purchase_order_payee ON purchase_order (payee_id);
 
--- Back-fill: the payee that exists today. Secret names are not known here, so none are recorded.
+-- Back-fill: the payee that exists today. Secret names are not known here (see owner check 2), so none are recorded.
 INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at, note)
 VALUES ('pay_legacy_itservices', 'IT Services by Rajat Agarwal', 'IT Services by Rajat Agarwal', 'razorpay', 'live', '{}', 'active', '["INR","USD"]', 1, 'migration', CAST(strftime('%s','now') AS INTEGER) * 1000, CAST(strftime('%s','now') AS INTEGER) * 1000, 'Payee in use before payee accounts existed.');
 
