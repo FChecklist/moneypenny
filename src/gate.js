@@ -9,6 +9,8 @@ import { creditPurchase, payId } from './wallet.js';
 import { displayRate, currentRate } from './fx.js';
 import { audit } from './audit.js';
 import { emit } from './outbox.js';
+import { payeesEnabled } from './payees.js';
+import { orderPayeeColumns, productId } from './routes.js';
 
 const MAX_ATTEMPTS = 8;
 
@@ -104,6 +106,9 @@ export async function buyCredits(ctx, b) {
     return orderView(prior);
   }
   if (!ctx.rail || ctx.rail.name === 'not_configured') throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');
+  // Payee routing is dark: with the flag off nothing is read or written. With it on, the payee is chosen now and copied onto the order for good.
+  const pc = payeesEnabled(ctx) ? await orderPayeeColumns(ctx, { product: b.product, currency: cur }) : null;
+  if (!pc && b.product != null) productId(b.product);
   const known = await findAccount(ctx, b.email);
   if (known && known.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
   const acc = await ensureAccount(ctx, b.email, { velocity: true });
@@ -113,6 +118,7 @@ export async function buyCredits(ctx, b) {
     "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, fixed_price, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending_rail',?,?)",
     id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, now + s.rate_lock_minutes * MIN, s.credits_per_usd, s.inr_paise_per_usd, fixed ? 1 : 0, now, now,
   );
+  if (pc) await ctx.db.run('UPDATE purchase_order SET product = ?, payee_id = ?, route_id = ?, payee_version = ?, mode = ?, payee_snapshot = ? WHERE id = ?', pc.product, pc.payee_id, pc.route_id, pc.payee_version, pc.mode, pc.payee_snapshot, id);
   await ctx.db.run('INSERT INTO rail_outbox (id, tenant_id, order_id, next_at, created_at) VALUES (?,?,?,?,?)', newId('rob'), ctx.tenantId, id, now, now);
   await processRail(ctx, ctx.rail, { orderId: id });
   return orderView(await ctx.db.first('SELECT * FROM purchase_order WHERE id = ?', id));
@@ -215,6 +221,7 @@ export async function railConfirm(ctx, b) {
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
   const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr }, fixedPrice: !!o.fixed_price }); // the order check above already proved paid >= the fixed price
   await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);
+  if (o.payee_id) await ctx.db.run('UPDATE verified_payment SET payee_id = ? WHERE tenant_id = ? AND ref = ? AND payee_id IS NULL', o.payee_id, ctx.tenantId, payRef); // the order's own payee, never today's route
   // More money than the order asked for: credits are given for the order only. The extra is flagged so the payment side can refund it.
   const overpaid = !repriced && paid > o.amount_minor ? paid - o.amount_minor : 0;
   if (overpaid) await emit(ctx, 'payment.overpaid', { order_id: o.id, payment_ref: payRef, overpaid_minor: overpaid, currency: o.currency });

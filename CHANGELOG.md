@@ -2,6 +2,16 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.8 (prepared 2026-11-25; NOT deployed yet)
+
+Payee accounts, chunks F3 and F4. Dark behind `MNP_PAYEE_ACCOUNTS` and not deployed. The money flag is unchanged.
+
+- F3: `src/routes.js`. `resolvePayee` picks the payee for (tenant, product, currency): product route, else the `*` route, else `no_route` (503). A paused main payee uses the fallback if active; otherwise `payee_unavailable` (503). A payee that does not take the currency gives `currency_unsupported` (422).
+- `buyCredits` takes an optional `product` and, with the flag on, writes product, payee id, route, payee version, mode and a snapshot on the order. They never change later. A repeat of the same order reference returns the first order. A paid order sets the payment record's payee from the order, never from today's route.
+- A fallback use writes an audit row and an owner alert (`payee.fallback_used`). `setRoute` (owner only) refuses overlap (`route_overlap`) and a payee that is not active.
+- F4: `src/gateways/` (registry, Razorpay adapter, fake adapter) and `src/secrets.js`. Create order, verify signature, refund. Secrets are read by NAME from the payee record through an injected reader. HTTP only through an injected `fetch`. Nothing calls the real gateway.
+- Tests: `test/payee-routing.test.js`, including a proof that credits, lots and the ledger chain are the same under two payees.
+
 ## 0.2.7 (prepared 2026-11-25; NOT deployed yet)
 
 Round 4 fixes after audit of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.

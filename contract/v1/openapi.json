@@ -112,6 +112,10 @@
       "status": 400,
       "meaning": "mode must be test or live."
     },
+    "bad_product": {
+      "status": 400,
+      "meaning": "product must be small letters, digits and underscore."
+    },
     "bad_request": {
       "status": 400,
       "meaning": "decision must be approve or reject."
@@ -183,6 +187,10 @@
     "credits_already_used": {
       "status": 409,
       "meaning": "Only … unspent credits can be refunded."
+    },
+    "currency_unsupported": {
+      "status": 422,
+      "meaning": "The payee does not take this currency."
     },
     "duplicate_ref": {
       "status": 409,
@@ -276,6 +284,10 @@
       "status": 404,
       "meaning": "No such purchase."
     },
+    "no_route": {
+      "status": 503,
+      "meaning": "No payee is set up for this product."
+    },
     "no_rule": {
       "status": 404,
       "meaning": "No such rule."
@@ -328,6 +340,10 @@
       "status": 409,
       "meaning": "Another payee is active for this gateway and mode. Pause or retire it first."
     },
+    "payee_not_active": {
+      "status": 409,
+      "meaning": "A route can point only to an active payee."
+    },
     "payee_not_found": {
       "status": 404,
       "meaning": "No such payee."
@@ -343,6 +359,10 @@
     "payee_setup_incomplete": {
       "status": 409,
       "meaning": "An active payee has no secret names. An owner must fill in the secret names first. Payee: …."
+    },
+    "payee_unavailable": {
+      "status": 503,
+      "meaning": "No payee can take this order now."
     },
     "payees_disabled": {
       "status": 503,
@@ -408,6 +428,10 @@
       "status": 401,
       "meaning": "This request was already used."
     },
+    "route_overlap": {
+      "status": 409,
+      "meaning": "Another route for this product overlaps that time."
+    },
     "rule_exists": {
       "status": 409,
       "meaning": "A rule for this event already exists. Edit it instead."
@@ -427,6 +451,10 @@
     "status_unknown": {
       "status": 503,
       "meaning": "AI access needs an off-switch source and none is set."
+    },
+    "tenant_not_found": {
+      "status": 404,
+      "meaning": "No such tenant."
     },
     "too_large": {
       "status": 413,

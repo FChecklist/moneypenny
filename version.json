@@ -1,6 +1,6 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
   "preparedAt": "2026-11-25T02:00:00Z",
@@ -10,6 +10,13 @@
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.8",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T04:00:00Z",
+      "releasedAt": null,
+      "notes": "Payee accounts F3 (routing and order snapshot) and F4 (gateway adapters), dark behind MNP_PAYEE_ACCOUNTS. With the flag on, buy_credits takes an optional product, picks the payee from payee_route (product row, else the * row, else no_route 503; paused or wrong-currency main payee uses the fallback if active, else payee_unavailable 503) and copies payee id, route, version, mode and a snapshot onto the order for good. A fallback use leaves an audit row and an owner alert. setRoute (owner only) refuses overlap and non-active payees. Gateway adapter interface with a Razorpay adapter (create order, verify signature, refund; injected fetch and secret reader, nothing calls the real gateway) and a fake adapter. Nothing in credits, lots, holds or the ledger chain reads the payee. Not wired yet: processRail still uses the old rail (F7/F9). No flag changed, nothing deployed."
+    },
     {
       "version": "0.2.7",
       "status": "prepared, not deployed",

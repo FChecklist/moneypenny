@@ -34,7 +34,7 @@ const badNames = (raw) => {
 };
 // Read-only calls (readOnly) only need the flag, so the owner can still look at the registry to see a setup problem.
 // Changes and routing calls are also refused while an active payee has no usable secret names.
-const gate = async (ctx, fillId, readOnly = false) => {
+export const gate = async (ctx, fillId, readOnly = false) => {
   if (!payeesEnabled(ctx)) throw new ApiError(503, 'payees_disabled', 'Payee accounts are not turned on.');
   if (readOnly) return;
   // The one way out: an owner edit that sets only the secret names of such a payee (fillId).
@@ -62,22 +62,26 @@ const changedKeys = (before, after) => {
 };
 const isPkConflict = (e) => /UNIQUE constraint failed|PRIMARY KEY|SQLITE_CONSTRAINT/i.test(String(e?.message || e));
 async function auditRow(ctx, db, action, payeeId, before, after) {
+  return chainRow(ctx, db, action, () => ({ payee_id: payeeId, changed: changedKeys(before, after) }));
+}
+/** One chained audit row with a caller-made detail (ids and names only, never free text or a secret value). Retries once on a seq clash. */
+export async function chainRow(ctx, db, action, detailFn) {
   // seq = last + 1 can clash if another writer got in between: try once more in a fresh transaction, then fail cleanly.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await db.tx((t) => auditRowOnce(ctx, t, action, payeeId, before, after));
+      return await db.tx((t) => auditRowOnce(ctx, t, action, detailFn()));
     } catch (e) {
       if (!isPkConflict(e)) throw e;
     }
   }
   throw new ApiError(409, 'audit_conflict', 'The audit log was busy. Nothing was changed. Try again.');
 }
-async function auditRowOnce(ctx, db, action, payeeId, before, after) {
+async function auditRowOnce(ctx, db, action, detail) {
   const last = await db.first('SELECT seq, hash FROM payee_audit ORDER BY seq DESC LIMIT 1');
   const seq = (last?.seq ?? 0) + 1;
   const prev = last?.hash ?? 'GENESIS';
   const ts = ctx.now();
-  const d = JSON.stringify({ payee_id: payeeId, changed: changedKeys(before, after) });
+  const d = JSON.stringify(detail);
   const hash = await sha256Hex(JSON.stringify([seq, ts, ctx.actor, action, d, prev, ctx.keyId || null]));
   await db.run('INSERT INTO payee_audit (seq, ts, actor, key_id, action, detail, change_id, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?)', seq, ts, ctx.actor, ctx.keyId || null, action, d, null, prev, hash);
 }
@@ -116,7 +120,7 @@ export const BANK_RULES = {
 };
 const LOOSE_FIELDS = ['address_lines', 'number_prefix', 'receipt_text'];
 const looksBank = (t, field = '') => BANK_RULES.digits(t, LOOSE_FIELDS.includes(field.split('.').pop())) || BANK_RULES.ifsc(t) || BANK_RULES.iban(t);
-const text = (v, field, { max = 200, req = false } = {}) => {
+export const text = (v, field, { max = 200, req = false } = {}) => {
   if (v == null || v === '') {
     if (req) throw new ApiError(400, 'bad_field', `${field} is needed.`);
     return null;
@@ -166,7 +170,7 @@ const validators = {
   note: (v) => text(v, 'note', { max: 1000 }),
 };
 
-const view = (r) =>
+export const view = (r) =>
   r && {
     payee_id: r.payee_id, legal_name: r.legal_name, display_name: r.display_name, gateway: r.gateway, mode: r.mode,
     secret_names: parseNames(r.secret_names), status: r.status, currencies: JSON.parse(r.currencies),
