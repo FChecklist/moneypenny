@@ -2,6 +2,16 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.5 (prepared 2026-11-25T04:00:00 IST; NOT deployed yet)
+
+Round 2 fixes after two more audits of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- Bank details are never stored: free text in `invoice`, `checkout`, `note` and `display_name` is refused (`bank_detail_refused`) if it holds a run of 9 or more digits (spaces or dashes allowed, so account and card numbers), an IFSC code, or an IBAN. `invoice.bank_name` must be letters only.
+- `payee_audit.detail` now holds only the names of the fields that changed, never the text.
+- The identity lock now also holds when `verified_payment.payee_id` or `payee_route` (payee or fallback) points at the payee.
+- The long-run text screen applies only to values with no spaces, dots or slashes, so long hostnames and addresses pass. Hex runs and the `rzp_`, `sk_`, `pk_`, `rk_`, `whsec_` prefixes are still refused everywhere.
+- Audit `seq` clash: retried once in a fresh transaction, then `audit_conflict` (409) and the change is rolled back.
+
 ## 0.2.4 (prepared 2026-11-25T03:00:00 IST; NOT deployed yet)
 
 Fix round after two audits of 0.2.3 (payee accounts F1 and F2). Still dark and not deployed. No money behaviour changed.

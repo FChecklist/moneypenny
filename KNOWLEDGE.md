@@ -5,7 +5,7 @@ For going live (steps, secret names, the Rs 1 test, flags, rollback) see `docs/G
 ## Version
 
 - Live version: **0.1.0** (live since 19 Nov 2026 IST, code 65b86c8).
-- Prepared, not deployed: **0.2.4** (24 Nov 2026 UTC; adds dark payee accounts F1 and F2 with the audit-fix round (audit rows, owner-only, value screening); it supersedes 0.2.0 to 0.2.3, which were prepared and never deployed). `package.json` and `version.json` say 0.2.4; `preparedAt` is the time of the commit that carries it; `version.json` has `status: "prepared, not deployed"`, `releasedAt: null` and `commit: null` until the deployer fills them in at deploy time (and sets `status` to `deployed`).
+- Prepared, not deployed: **0.2.5** (24 Nov 2026 UTC; adds dark payee accounts F1 and F2 with two audit-fix rounds (audit rows, owner-only, value and bank-detail screening); it supersedes 0.2.0 to 0.2.4, which were prepared and never deployed). `package.json` and `version.json` say 0.2.5; `preparedAt` is the time of the commit that carries it; `version.json` has `status: "prepared, not deployed"`, `releasedAt: null` and `commit: null` until the deployer fills them in at deploy time (and sets `status` to `deployed`).
 - Where the version lives: `version.json` at the repo root (product, version, releasedAt, releasedAtIST, commit, and a `changes` list). This product has no static site; the Worker serves the API only, so `version.json` is not served. Version history in words: `CHANGELOG.md`.
 - Not yet deployed: everything since 65b86c8 (INR fixed pack price, console wallet module, the go-live hardening below). All of it is in 0.2.2.
 

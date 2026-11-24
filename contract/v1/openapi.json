@@ -72,6 +72,10 @@
       "status": 409,
       "meaning": "This request ran out of time. Ask again."
     },
+    "audit_conflict": {
+      "status": 409,
+      "meaning": "The audit log was busy. Nothing was changed. Try again."
+    },
     "bad_ask": {
       "status": 400,
       "meaning": "The ask is missing something or is not valid."
@@ -139,6 +143,10 @@
     "balance_changed": {
       "status": 409,
       "meaning": "Balance changed. Try again."
+    },
+    "bank_detail_refused": {
+      "status": 400,
+      "meaning": "… looks like a bank detail (account, card, IFSC or IBAN). Bank details are never stored here."
     },
     "below_minimum": {
       "status": 422,

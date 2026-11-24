@@ -184,9 +184,7 @@ test('F2-i: every mutator writes exactly one audit row; a failed change writes n
   assert.deepEqual(rows.map((r) => r.action), ['payee.create', 'payee.edit', 'payee.activate', 'payee.pause', 'payee.resume', 'payee.retire']);
   assert.ok(rows.every((r) => r.actor === 'owner'));
   const edit = JSON.parse(rows[1].detail);
-  assert.equal(edit.before.note, null);
-  assert.equal(edit.after.note, 'hello');
-  assert.deepEqual(edit.after.secret_names, NAMES); // names only
+  assert.deepEqual(edit.changed, ['note', 'version']); // key names only, no values
   for (const v of Object.values(VALUES)) assert.ok(!JSON.stringify(rows).includes(v));
   const n = rows.length;
   await code(P.pausePayee(ctx, p.payee_id)); // retired: refused
@@ -249,4 +247,108 @@ test('F1-d: migration header and contract carry the owner checks and payee_forbi
   const file = JSON.parse(readFileSync(new URL('../contract/v1/openapi.json', import.meta.url), 'utf8'));
   assert.match(JSON.stringify(file), /"payee_forbidden":\{"status":403/);
   assert.deepEqual(file, JSON.parse(JSON.stringify(buildContract())));
+});
+
+// ---- round 2 ----
+const bankTexts = {
+  digits: '1234567890123', // account-like, 13 digits
+  digits_spaced: '1234 5678 9012',
+  digits9: '123456789',
+  card: '4111 1111 1111 1111',
+  card_dash: '4111-1111-1111-1111',
+  ifsc: 'Pay to HDFC0001234 branch',
+  iban: 'GB82 WEST 1234 5698 7654 32',
+  iban_plain: 'DE89370400440532013000',
+};
+test('R2-1: bank details are refused in every free-text field, never echoed', async () => {
+  const { ctx } = await reg();
+  assert.ok(P.BANK_RULES.digits('123456789') && !P.BANK_RULES.digits('12345678') && P.BANK_RULES.ifsc('SBIN0ABC123') && P.BANK_RULES.iban('GB82WEST12345698765432'));
+  for (const [n, v] of Object.entries(bankTexts)) {
+    const fields = [
+      { invoice: { footer: v } }, { invoice: { address_lines: v } }, { invoice: { receipt_text: v } }, { checkout: { description: v } },
+      { checkout: { brand_name: v } }, { note: v }, { display_name: v },
+    ];
+    for (const f of fields) {
+      assert.equal(await code(P.createPayee(ctx, input(f))), 'bank_detail_refused', n + JSON.stringify(f));
+      assert.ok(!String(code.last.message).includes(v));
+    }
+  }
+  const p = await P.createPayee(ctx, input());
+  assert.equal(await code(P.editPayee(ctx, p.payee_id, { note: bankTexts.ifsc })), 'bank_detail_refused');
+  // ordinary text still passes, including short numbers and dates
+  await P.editPayee(ctx, p.payee_id, { invoice: { footer: 'Invoice 2026-11-25, GSTIN 29ABCDE1234F1Z5, SAC 998439', sac_code: '998439' } });
+});
+test('R2-1b: bank_name stays plain letters', async () => {
+  const { ctx } = await reg();
+  const p = await P.createPayee(ctx, input({ invoice: { bank_name: 'State Bank of India' } }));
+  assert.equal(p.invoice.bank_name, 'State Bank of India');
+  for (const v of ['Bank 24', 'Bank <b>', 'HDFC0001234']) assert.equal(await code(P.createPayee(ctx, input({ invoice: { bank_name: v } }))), v === 'HDFC0001234' ? 'bank_detail_refused' : 'bad_field');
+});
+
+test('R2-2: audit detail holds key names only, never free text', async () => {
+  const { s, ctx } = await reg();
+  const p = await P.createPayee(ctx, input({ note: 'private words', invoice: { footer: 'secret footer' }, checkout: { brand_name: 'Brand Z' } }));
+  await P.editPayee(ctx, p.payee_id, { note: 'other words', invoice: { footer: 'new footer' } });
+  const rows = await audits(s);
+  const all = JSON.stringify(rows.map((r) => r.detail));
+  for (const w of ['private words', 'secret footer', 'Brand Z', 'other words', 'new footer', 'Payee B Legal']) assert.ok(!all.includes(w), w);
+  assert.deepEqual(JSON.parse(rows[1].detail), { payee_id: p.payee_id, changed: ['invoice', 'note', 'version'] });
+  assert.ok(JSON.parse(rows[0].detail).changed.includes('note'));
+});
+
+test('R2-3: identity is also locked by a verified payment or a route', async () => {
+  for (const kind of ['payment', 'route', 'fallback']) {
+    const { s, ctx } = await reg();
+    const p = await P.createPayee(ctx, input());
+    assert.equal(await P.hasOrders(ctx, p.payee_id), false);
+    if (kind === 'payment') await s.db.run("INSERT INTO verified_payment (tenant_id, ref, paid_minor, currency, created_at, payee_id) VALUES ('demo','pp1',100,'USD',1,?)", p.payee_id);
+    else await s.db.run(`INSERT INTO payee_route (route_id, tenant_id, product_id, payee_id, fallback_payee_id, effective_from, set_by, created_at) VALUES ('r1','demo','*',?,?,1,'o',1)`, kind === 'route' ? p.payee_id : 'pay_legacy_itservices', kind === 'fallback' ? p.payee_id : null);
+    assert.equal(await P.hasOrders(ctx, p.payee_id), true, kind);
+    assert.equal(await code(P.editPayee(ctx, p.payee_id, { legal_name: 'Changed' })), 'identity_locked', kind);
+    assert.equal((await P.editPayee(ctx, p.payee_id, { note: 'fine' })).note, 'fine');
+  }
+});
+
+test('R2-4: long-run screen skips hostnames and addresses; hex and prefixes are still refused', async () => {
+  const { ctx } = await reg();
+  const host = 'https://very-long-subdomain-name.example-company.co.in';
+  assert.ok(host.length >= 40);
+  const p = await P.createPayee(ctx, input({ checkout: { frame_origin: host, description: 'Office at 12 Some Long Road Name Extension Layout Bengaluru' } }));
+  assert.equal(p.checkout.frame_origin, host);
+  assert.equal(await code(P.createPayee(ctx, input({ note: 'abcdef0123456789'.repeat(2) + 'abcdef01' }))), 'secret_value_refused'); // 40 hex
+  assert.equal(await code(P.createPayee(ctx, input({ note: 'Zq'.repeat(20) }))), 'secret_value_refused'); // 40 mixed, no spaces
+  for (const v of ['rzp_x', 'sk_abcdefgh12', 'pk_abcdefgh12', 'rk_abcdefgh12', 'whsec_abcdefgh12', 'see Sk_abcdefgh12 here']) assert.equal(await code(P.createPayee(ctx, input({ note: v }))), 'secret_value_refused', v);
+});
+
+// A db whose reads are followed by a rival audit write, as if another writer got in between.
+const rival = (db, times) => {
+  let left = times;
+  const wrap = (h) => ({
+    ...h,
+    first: async (sql, ...a) => {
+      const r = await h.first(sql, ...a);
+      if (/FROM payee_audit/.test(sql) && left > 0) {
+        left--;
+        await h.run("INSERT INTO payee_audit (seq, ts, actor, action, detail, prev_hash, hash) VALUES (?,1,'rival','x','{}','p','h')", (r?.seq ?? 0) + 1);
+      }
+      return r;
+    },
+    tx: (fn) => h.tx((x) => fn(wrap(x))),
+  });
+  return wrap(db);
+};
+test('R2-5: an audit seq clash is retried once, then fails cleanly and rolls back', async () => {
+  const { s, ctx } = await reg();
+  const p = await P.createPayee(ctx, input());
+  const n = (await audits(s)).length;
+  const once = { ...ctx, db: rival(s.db, 1) };
+  const e = await P.editPayee(once, p.payee_id, { note: 'a' });
+  assert.equal(e.note, 'a');
+  const rows = await audits(s);
+  assert.equal(rows.length, n + 2); // rival row plus ours
+  assert.deepEqual(rows.map((r) => r.seq), rows.map((_, i) => i + 1));
+  assert.equal(rows.at(-1).prev_hash, rows.at(-2).hash);
+  const twice = { ...ctx, db: rival(s.db, 2) };
+  await assert.rejects(P.editPayee(twice, p.payee_id, { note: 'b' }), (x) => x.code === 'audit_conflict' && x.status === 409);
+  assert.equal((await P.getPayee(ctx, p.payee_id)).note, 'a'); // change rolled back
 });

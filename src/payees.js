@@ -27,12 +27,30 @@ const ownerOnly = (ctx) => {
 /** One hash-chained payee_audit row, written in the caller's transaction. Never a secret value: secret_names holds NAMES only. */
 const SAFE = ['legal_name', 'display_name', 'gateway', 'mode', 'status', 'currencies', 'checkout', 'invoice', 'secret_names', 'note', 'version'];
 const snap = (r) => r && Object.fromEntries(SAFE.map((k) => [k, view(r)[k]]));
+// The audit detail holds only the NAMES of the fields that changed, never a value (free text may be sensitive).
+const changedKeys = (before, after) => {
+  const b = snap(before) || {};
+  const a = snap(after) || {};
+  return SAFE.filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]));
+};
+const isPkConflict = (e) => /UNIQUE constraint failed|PRIMARY KEY|SQLITE_CONSTRAINT/i.test(String(e?.message || e));
 async function auditRow(ctx, db, action, payeeId, before, after) {
+  // seq = last + 1 can clash if another writer got in between: try once more in a fresh transaction, then fail cleanly.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await db.tx((t) => auditRowOnce(ctx, t, action, payeeId, before, after));
+    } catch (e) {
+      if (!isPkConflict(e)) throw e;
+    }
+  }
+  throw new ApiError(409, 'audit_conflict', 'The audit log was busy. Nothing was changed. Try again.');
+}
+async function auditRowOnce(ctx, db, action, payeeId, before, after) {
   const last = await db.first('SELECT seq, hash FROM payee_audit ORDER BY seq DESC LIMIT 1');
   const seq = (last?.seq ?? 0) + 1;
   const prev = last?.hash ?? 'GENESIS';
   const ts = ctx.now();
-  const d = JSON.stringify({ payee_id: payeeId, before: snap(before), after: snap(after) });
+  const d = JSON.stringify({ payee_id: payeeId, changed: changedKeys(before, after) });
   const hash = await sha256Hex(JSON.stringify([seq, ts, ctx.actor, action, d, prev, ctx.keyId || null]));
   await db.run('INSERT INTO payee_audit (seq, ts, actor, key_id, action, detail, change_id, prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?)', seq, ts, ctx.actor, ctx.keyId || null, action, d, null, prev, hash);
 }
@@ -54,7 +72,14 @@ function names(v) {
   return out;
 }
 /** Same value detection as checkSecretName, for free text: long hex or base64-like runs, rzp_ text, key-like words. Never echoes the text. */
-const looksSecret = (t) => /rzp_/i.test(t) || /[A-Fa-f0-9]{32,}/.test(t) || /[A-Za-z0-9+/_=-]{32,}/.test(t) || /\b(?:sk|pk|rk|whsec)_[A-Za-z0-9]{8,}/i.test(t);
+const looksSecret = (t) => /rzp_/i.test(t) || /[A-Fa-f0-9]{32,}/.test(t) || (!/[\s./]/.test(t) && /[A-Za-z0-9+/_=-]{32,}/.test(t)) || /\b(?:sk|pk|rk|whsec)_[A-Za-z0-9]{8,}/i.test(t);
+/** Bank details must never be stored. Each rule has its own name so a test can reach it. */
+export const BANK_RULES = {
+  digits: (t) => /\d(?:[ -]?\d){8,}/.test(t), // account number (9 to 18 digits) or card number (13 to 19), spaces or dashes allowed
+  ifsc: (t) => /(?<![A-Za-z0-9])[A-Za-z]{4}0[A-Za-z0-9]{6}(?![A-Za-z0-9])/.test(t),
+  iban: (t) => /(?<![A-Za-z0-9])[A-Za-z]{2}\d{2}(?: ?[A-Za-z0-9]{4}){2,7}(?: ?[A-Za-z0-9]{1,3})?(?![A-Za-z0-9])/.test(t),
+};
+const looksBank = (t) => Object.values(BANK_RULES).some((f) => f(t));
 const text = (v, field, { max = 200, req = false } = {}) => {
   if (v == null || v === '') {
     if (req) throw new ApiError(400, 'bad_field', `${field} is needed.`);
@@ -62,6 +87,7 @@ const text = (v, field, { max = 200, req = false } = {}) => {
   }
   if (typeof v !== 'string' || v.length > max) throw new ApiError(400, 'bad_field', `${field} must be text of at most ${max} characters.`);
   if (looksSecret(v)) throw new ApiError(400, 'secret_value_refused', `${field} looks like a secret value. Never paste a secret value.`);
+  if (looksBank(v)) throw new ApiError(400, 'bank_detail_refused', `${field} looks like a bank detail (account, card, IFSC or IBAN). Bank details are never stored here.`);
   return v.trim();
 };
 function currencies(v) {
@@ -75,6 +101,7 @@ function bag(v, field, allowed) {
   for (const [k, x] of Object.entries(v)) {
     if (!allowed.includes(k)) throw new ApiError(400, 'bad_field', `${field} has an unknown field.`);
     out[k] = text(x, `${field}.${k}`, { max: 500 });
+    if (k === 'bank_name' && out[k] != null && !/^[A-Za-z][A-Za-z .&'-]*$/.test(out[k])) throw new ApiError(400, 'bad_field', 'invoice.bank_name must be letters only.');
   }
   return out;
 }
@@ -116,7 +143,13 @@ async function load(ctx, id) {
   if (!r) throw new ApiError(404, 'payee_not_found', 'No such payee.');
   return r;
 }
-export const hasOrders = async (ctx, id) => !!(await ctx.db.first('SELECT 1 x FROM purchase_order WHERE payee_id = ? LIMIT 1', id));
+// Locked once an order, a verified payment or a route points at the payee.
+export const hasOrders = async (ctx, id) =>
+  !!(
+    (await ctx.db.first('SELECT 1 x FROM purchase_order WHERE payee_id = ? LIMIT 1', id)) ||
+    (await ctx.db.first('SELECT 1 x FROM verified_payment WHERE payee_id = ? LIMIT 1', id)) ||
+    (await ctx.db.first('SELECT 1 x FROM payee_route WHERE payee_id = ? OR fallback_payee_id = ? LIMIT 1', id, id))
+  );
 
 /** Which of this payee's secret NAMES exist in the platform store. Returns names and true/false only, never a value. */
 export function secretPresence(ctx, names_) {
