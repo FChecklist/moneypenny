@@ -13,8 +13,11 @@ const old = () => readMigrationFiles().filter(([f]) => f < '0005');
 const NAMES = { key_id: 'MNP_PAYEE_B_KEY_ID', key_secret: 'MNP_PAYEE_B_KEY_SECRET', webhook_secret: 'MNP_PAYEE_B_WEBHOOK_SECRET' };
 const VALUES = { MNP_PAYEE_B_KEY_ID: 'rzp_' + 'test_AbCdEfGhIjKlMnOp', MNP_PAYEE_B_KEY_SECRET: 'sEcReT-value-1234567890', MNP_PAYEE_B_WEBHOOK_SECRET: 'whsec-value-0987654321' };
 const input = (o = {}) => ({ legal_name: 'Payee B Legal', gateway: 'razorpay', mode: 'test', secret_names: NAMES, currencies: ['INR'], ...o });
-const reg = async (extra = {}) => {
+const LEGACY = { key_id: 'MNP_LEGACY_KEY_ID', key_secret: 'MNP_LEGACY_KEY_SECRET', webhook_secret: 'MNP_LEGACY_WEBHOOK_SECRET' };
+const reg = async (extra = {}, { fillLegacy = true } = {}) => {
   const s = await setup();
+  // the legacy payee ships with empty secret names; an owner fills them in before the registry is used
+  if (fillLegacy) await s.db.run("UPDATE payee_account SET secret_names = ? WHERE payee_id = 'pay_legacy_itservices'", JSON.stringify(LEGACY));
   return { s, ctx: { ...s.ctx(), payees: true, actor: 'owner', callerType: 'owner', env: { ...VALUES }, ...extra } };
 };
 const code = (p) => assert.rejects(p, (e) => (code.last = e.code) && true).then(() => code.last);
@@ -351,4 +354,100 @@ test('R2-5: an audit seq clash is retried once, then fails cleanly and rolls bac
   const twice = { ...ctx, db: rival(s.db, 2) };
   await assert.rejects(P.editPayee(twice, p.payee_id, { note: 'b' }), (x) => x.code === 'audit_conflict' && x.status === 409);
   assert.equal((await P.getPayee(ctx, p.payee_id)).note, 'a'); // change rolled back
+});
+
+// ---- round 3 ----
+const mkActive = async (ctx, o) => {
+  const p = await P.createPayee(ctx, input(o));
+  return P.activatePayee(ctx, p.payee_id);
+};
+test('R3-1: secret names of a retired payee stay reserved', async () => {
+  const { ctx } = await reg();
+  const p = await mkActive(ctx);
+  await P.retirePayee(ctx, p.payee_id);
+  assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Other Name' }))), 'payee_exists'); // same names
+  assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Other Name', mode: 'live', gateway: 'stripe' }))), 'payee_exists'); // other gateway and mode too
+  const moved = { key_id: 'MNP_NEW_KEY_ID', key_secret: NAMES.key_secret, webhook_secret: 'MNP_NEW_WEBHOOK' }; // one reused name is enough
+  assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Other Name', secret_names: moved }))), 'payee_exists');
+  const fresh = await P.createPayee(ctx, input({ legal_name: 'Other Name', secret_names: { key_id: 'MNP_N_KEY_ID', key_secret: 'MNP_N_KEY_SECRET', webhook_secret: 'MNP_N_WEBHOOK' } }));
+  assert.equal(await code(P.editPayee(ctx, fresh.payee_id, { secret_names: NAMES })), 'payee_exists'); // edit cannot take them either
+});
+
+test('R3-2: an active payee with empty secret names blocks every operation until an owner fills them in', async () => {
+  const { s, ctx } = await reg({ env: { ...VALUES, MNP_LEGACY_KEY_ID: 'a1', MNP_LEGACY_KEY_SECRET: 'b2', MNP_LEGACY_WEBHOOK_SECRET: 'c3' } }, { fillLegacy: false });
+  for (const f of [() => P.createPayee(ctx, input()), () => P.listPayees(ctx), () => P.getPayee(ctx, 'pay_legacy_itservices'), () => P.pausePayee(ctx, 'pay_legacy_itservices'), () => P.editPayee(ctx, 'pay_legacy_itservices', { note: 'x' })]) {
+    const e = await f().then(() => null, (x) => x);
+    assert.equal(e?.code, 'payee_setup_incomplete');
+    assert.match(e.message, /owner must fill in the secret names first/);
+  }
+  assert.equal((await audits(s)).length, 0);
+  // the one way out: an owner edit that sets only the secret names
+  const filled = await P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: LEGACY });
+  assert.deepEqual(filled.secret_names, LEGACY);
+  await P.pausePayee(ctx, 'pay_legacy_itservices');
+  await P.activatePayee(ctx, 'pay_legacy_itservices');
+  await P.createPayee(ctx, input());
+  // the flag off still wins with its own code
+  const off = { ...ctx, payees: false, env: {} };
+  assert.equal(await code(P.listPayees(off)), 'payees_disabled');
+});
+
+// A db double: real rollback, but one chosen statement fails (before or after it runs).
+const flaky = (db, re, after) => {
+  const wrap = (h) => ({
+    ...h,
+    run: async (sql, ...a) => {
+      if (!re.test(sql)) return h.run(sql, ...a);
+      if (!after) throw new Error('boom');
+      await h.run(sql, ...a);
+      throw new Error('boom');
+    },
+    tx: (fn) => h.tx((x) => fn(wrap(x))),
+  });
+  return wrap(db);
+};
+test('R3-3: the payee change and its audit row commit or fail together', async () => {
+  const { s, ctx } = await reg();
+  const p = await P.createPayee(ctx, input());
+  const n = (await audits(s)).length;
+  const row = () => s.db.first('SELECT version, note, status FROM payee_account WHERE payee_id = ?', p.payee_id).then((r) => ({ ...r }));
+  const before = await row();
+  const ops = [(c) => P.editPayee(c, p.payee_id, { note: 'n' }), (c) => P.activatePayee(c, p.payee_id), (c) => P.createPayee(c, input({ legal_name: 'Third', secret_names: { key_id: 'MNP_T_KEY_ID', key_secret: 'MNP_T_KEY_SECRET', webhook_secret: 'MNP_T_WEBHOOK' } }))];
+  const count = () => s.db.first('SELECT COUNT(*) n FROM payee_account').then((r) => r.n);
+  const rows = await count();
+  for (const op of ops) {
+    // audit write fails (before or after it ran): the business row is unchanged
+    for (const after of [false, true]) {
+      await assert.rejects(op({ ...ctx, db: flaky(s.db, /INSERT INTO payee_audit/, after) }), /boom/);
+      assert.deepEqual(await row(), before);
+      assert.equal(await count(), rows);
+      assert.equal((await audits(s)).length, n);
+    }
+    // the reverse: business write fails after the audit row would follow (update/insert), no audit row stays
+    await assert.rejects(op({ ...ctx, db: flaky(s.db, /^(UPDATE payee_account|INSERT INTO payee_account)/, true) }), /boom/);
+    assert.deepEqual(await row(), before);
+    assert.equal(await count(), rows);
+    assert.equal((await audits(s)).length, n);
+  }
+  // success: both rows are there
+  await P.editPayee(ctx, p.payee_id, { note: 'ok' });
+  assert.equal((await row()).note, 'ok');
+  assert.equal((await audits(s)).length, n + 1);
+});
+
+let uniq = 0;
+test('R3-4: strict digit rule everywhere, PIN and phone allowed only in three fields', async () => {
+  const { ctx } = await reg();
+  const loose = (v) => [{ invoice: { address_lines: v } }, { invoice: { number_prefix: v } }, { invoice: { receipt_text: v } }];
+  const strict = (v) => [{ invoice: { footer: v } }, { invoice: { refund_text: v } }, { checkout: { description: v } }, { note: v }, { display_name: v }, { invoice: { sac_text: v } }];
+  const ok = ['12 MG Road, Bengaluru 560001', 'Phone 9876543210', 'Ph 98765 43210, PIN 560001', 'INV-560001-'];
+  for (const v of ok) {
+    for (const f of loose(v)) await P.createPayee(ctx, input({ ...f, legal_name: 'Law ' + (++uniq), secret_names: { key_id: 'MNP_' + Math.random().toString(36).slice(2, 8).toUpperCase() + '_ID', key_secret: 'MNP_S' + Math.random().toString(36).slice(2, 8).toUpperCase(), webhook_secret: 'MNP_W' + Math.random().toString(36).slice(2, 8).toUpperCase() } })).catch((e) => assert.fail(v + JSON.stringify(f) + e.code));
+    for (const f of strict(v)) if (/\d{9,}|\d{5} \d{5}/.test(v)) assert.equal(await code(P.createPayee(ctx, input(f))), 'bank_detail_refused', v + JSON.stringify(f));
+  }
+  for (const f of strict('PIN 560001')) assert.ok(!P.BANK_RULES.digits('PIN 560001')); // 6 digits are not 9+ anywhere
+  const bad = ['123456789', '12345678901', '1234567890123', '4111 1111 1111 1111', '560001 9876543210', 'Account 560001', 'A/C 560001', 'a/c no 9876543210', 'IFSC code, 560001', 'IBAN ref 9876543210', 'account: 98765 43210'];
+  for (const v of bad) for (const f of loose(v)) assert.equal(await code(P.createPayee(ctx, input(f))), 'bank_detail_refused', v + JSON.stringify(f));
+  // rule level
+  assert.ok(P.BANK_RULES.digits('9876543210') && !P.BANK_RULES.digits('9876543210', true) && P.BANK_RULES.digits('12345678901', true));
 });

@@ -318,7 +318,7 @@
     },
     "payee_exists": {
       "status": 409,
-      "meaning": "A payee with the same name or key name already exists for this gateway and mode."
+      "meaning": "A secret name was used by a retired payee. A retired payee\\"
     },
     "payee_forbidden": {
       "status": 403,
@@ -335,6 +335,10 @@
     "payee_secret_missing": {
       "status": 409,
       "meaning": "A secret name is not in the platform store."
+    },
+    "payee_setup_incomplete": {
+      "status": 409,
+      "meaning": "An active payee has no secret names. An owner must fill in the secret names first."
     },
     "payees_disabled": {
       "status": 503,

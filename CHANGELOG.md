@@ -2,6 +2,16 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.6 (prepared 2026-11-25; NOT deployed yet)
+
+Round 3 fixes after audit of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- The secret names of a retired payee stay reserved for ever: a new or edited payee cannot use any of them (`payee_exists`), whatever its gateway or mode.
+- While `MNP_PAYEE_ACCOUNTS` is on, every call is refused with `payee_setup_incomplete` (409) if any active payee has empty secret names. The legacy payee ships that way. An owner must fill in the secret names first: an owner edit that sets only `secret_names` on that payee is allowed (and is not blocked by the order lock, since no name is changing).
+- Test proves a payee change and its audit row share one transaction (a failed audit write, or a failed business write, leaves neither).
+- Digit rule: 9 to 18 digits is refused everywhere, except in `address_lines`, `number_prefix` and `receipt_text`, where exactly 6 (PIN) or exactly 10 (phone) digits are allowed. Any other run of 9 or more digits is still refused there, and so is a run of 6 or more digits near the words account, a/c, ifsc, iban.
+- Contract file regenerated (`payee_setup_incomplete`).
+
 ## 0.2.5 (prepared 2026-11-25T04:00:00 IST; NOT deployed yet)
 
 Round 2 fixes after two more audits of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.

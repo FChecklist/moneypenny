@@ -15,8 +15,15 @@ const TEXT = ['display_name', 'checkout', 'invoice', 'note'];
 const NAME_RE = /^[A-Z][A-Z0-9_]{2,63}$/;
 
 export const payeesEnabled = (ctx) => ctx.payees === true || ctx.env?.MNP_PAYEE_ACCOUNTS === '1';
-const gate = (ctx) => {
+const gate = async (ctx, fillId) => {
   if (!payeesEnabled(ctx)) throw new ApiError(503, 'payees_disabled', 'Payee accounts are not turned on.');
+  // An active payee with no secret names cannot be paused and resumed, so nothing runs until an owner fills them in.
+  // The one way out: an owner edit that sets only the secret names of such a payee (fillId).
+  const rows = await ctx.db.all("SELECT payee_id, secret_names FROM payee_account WHERE status = 'active'");
+  const empty = rows.filter((r) => !Object.keys(JSON.parse(r.secret_names || '{}') || {}).length);
+  if (empty.length && !(fillId && empty.every((r) => r.payee_id === fillId))) {
+    throw new ApiError(409, 'payee_setup_incomplete', 'An active payee has no secret names. An owner must fill in the secret names first.');
+  }
 };
 // Every change needs the owner role: ctx.callerType === 'owner' (the repo's existing caller type, set only by
 // the code that builds the context, never by a request). The actor must be a real name, not 'system'.
@@ -75,11 +82,20 @@ function names(v) {
 const looksSecret = (t) => /rzp_/i.test(t) || /[A-Fa-f0-9]{32,}/.test(t) || (!/[\s./]/.test(t) && /[A-Za-z0-9+/_=-]{32,}/.test(t)) || /\b(?:sk|pk|rk|whsec)_[A-Za-z0-9]{8,}/i.test(t);
 /** Bank details must never be stored. Each rule has its own name so a test can reach it. */
 export const BANK_RULES = {
-  digits: (t) => /\d(?:[ -]?\d){8,}/.test(t), // account number (9 to 18 digits) or card number (13 to 19), spaces or dashes allowed
+  // Strict: account number (9 to 18 digits) or card number (13 to 19), spaces or dashes allowed.
+  // Loose (address_lines, number_prefix, receipt_text only): a run of exactly 10 (phone) is allowed, and 6 (PIN) is under 9 anyway;
+  // any other run of 9 or more is refused, and so is any run of 6 or more near the words account, a/c, ifsc, iban.
+  digits: (t, loose = false) => {
+    const runs = (t.match(/\d(?:[ -]?\d)*/g) || []).map((r) => r.replace(/\D/g, '').length);
+    if (!loose) return runs.some((n) => n >= 9);
+    if (runs.some((n) => n >= 9 && n !== 10)) return true;
+    return runs.some((n) => n >= 6) && /account|a\/c|\bac\b|ifsc|iban/i.test(t);
+  },
   ifsc: (t) => /(?<![A-Za-z0-9])[A-Za-z]{4}0[A-Za-z0-9]{6}(?![A-Za-z0-9])/.test(t),
   iban: (t) => /(?<![A-Za-z0-9])[A-Za-z]{2}\d{2}(?: ?[A-Za-z0-9]{4}){2,7}(?: ?[A-Za-z0-9]{1,3})?(?![A-Za-z0-9])/.test(t),
 };
-const looksBank = (t) => Object.values(BANK_RULES).some((f) => f(t));
+const LOOSE_FIELDS = ['address_lines', 'number_prefix', 'receipt_text'];
+const looksBank = (t, field = '') => BANK_RULES.digits(t, LOOSE_FIELDS.includes(field.split('.').pop())) || BANK_RULES.ifsc(t) || BANK_RULES.iban(t);
 const text = (v, field, { max = 200, req = false } = {}) => {
   if (v == null || v === '') {
     if (req) throw new ApiError(400, 'bad_field', `${field} is needed.`);
@@ -87,7 +103,7 @@ const text = (v, field, { max = 200, req = false } = {}) => {
   }
   if (typeof v !== 'string' || v.length > max) throw new ApiError(400, 'bad_field', `${field} must be text of at most ${max} characters.`);
   if (looksSecret(v)) throw new ApiError(400, 'secret_value_refused', `${field} looks like a secret value. Never paste a secret value.`);
-  if (looksBank(v)) throw new ApiError(400, 'bank_detail_refused', `${field} looks like a bank detail (account, card, IFSC or IBAN). Bank details are never stored here.`);
+  if (looksBank(v, field)) throw new ApiError(400, 'bank_detail_refused', `${field} looks like a bank detail (account, card, IFSC or IBAN). Bank details are never stored here.`);
   return v.trim();
 };
 function currencies(v) {
@@ -163,8 +179,14 @@ export function secretPresence(ctx, names_) {
 }
 
 async function clash(ctx, p, exceptId) {
-  const rows = await ctx.db.all("SELECT payee_id, legal_name, gateway, mode, secret_names, status FROM payee_account WHERE payee_id != ? AND status != 'retired'", exceptId ?? '');
+  const rows = await ctx.db.all("SELECT payee_id, legal_name, gateway, mode, secret_names, status FROM payee_account WHERE payee_id != ?", exceptId ?? '');
+  const mine = new Set(Object.values(p.secret_names));
   for (const r of rows) {
+    // The secret names of a retired payee stay reserved for good (any gateway, mode or role).
+    if (r.status === 'retired' && Object.values(JSON.parse(r.secret_names)).some((n) => mine.has(n))) {
+      throw new ApiError(409, 'payee_exists', 'A secret name was used by a retired payee. A retired payee\'s secret names can never be used again.');
+    }
+    if (r.status === 'retired') continue;
     const same = r.gateway === p.gateway && r.mode === p.mode;
     if (same && (r.legal_name.toLowerCase() === p.legal_name.toLowerCase() || JSON.parse(r.secret_names).key_id === p.secret_names.key_id)) {
       throw new ApiError(409, 'payee_exists', 'A payee with the same name or key name already exists for this gateway and mode.');
@@ -173,7 +195,7 @@ async function clash(ctx, p, exceptId) {
 }
 
 export async function createPayee(ctx, input = {}) {
-  gate(ctx);
+  await gate(ctx);
   ownerOnly(ctx);
   if (!input || typeof input !== 'object') throw new ApiError(400, 'bad_field', 'Body must be an object.');
   for (const k of Object.keys(input)) if (![...IDENTITY, ...TEXT].includes(k)) throw new ApiError(400, 'bad_field', `${k} is not a payee field.`);
@@ -199,16 +221,16 @@ export async function createPayee(ctx, input = {}) {
 }
 
 export async function getPayee(ctx, id) {
-  gate(ctx);
+  await gate(ctx);
   return view(await load(ctx, id));
 }
 export async function listPayees(ctx) {
-  gate(ctx);
+  await gate(ctx);
   return (await ctx.db.all('SELECT * FROM payee_account ORDER BY created_at, payee_id')).map(view);
 }
 
 export async function editPayee(ctx, id, changes = {}) {
-  gate(ctx);
+  await gate(ctx, changes && typeof changes === 'object' && Object.keys(changes).join() === 'secret_names' ? id : undefined);
   ownerOnly(ctx);
   if (!changes || typeof changes !== 'object') throw new ApiError(400, 'bad_field', 'Body must be an object.');
   for (const k of Object.keys(changes)) if (![...IDENTITY, ...TEXT].includes(k)) throw new ApiError(400, 'bad_field', `${k} is not a payee field.`);
@@ -222,7 +244,8 @@ export async function editPayee(ctx, id, changes = {}) {
     if (cur.status === 'retired') throw new ApiError(409, 'payee_retired', 'A retired payee cannot be changed.');
     if (clean.mode !== undefined && clean.mode !== cur.mode) throw new ApiError(409, 'mode_fixed', 'The mode is fixed at creation. Make a new payee.');
     const identityKeys = keys.filter((k) => IDENTITY.includes(k) && JSON.stringify(clean[k]) !== JSON.stringify(k === 'secret_names' || k === 'currencies' ? JSON.parse(cur[k]) : cur[k]));
-    if (identityKeys.length && (await hasOrders(c, id))) throw new ApiError(409, 'identity_locked', 'This payee has had an order. Name, gateway, secret names and currencies cannot change. Make a new payee.');
+    const filling = identityKeys.join() === 'secret_names' && !Object.keys(JSON.parse(cur.secret_names || '{}')).length; // first fill-in is not a change of a name
+    if (identityKeys.length && !filling && (await hasOrders(c, id))) throw new ApiError(409, 'identity_locked', 'This payee has had an order. Name, gateway, secret names and currencies cannot change. Make a new payee.');
     const next = { ...view(cur), ...clean };
     if (identityKeys.length) await clash(c, next, id);
     if (cur.status === 'active' && identityKeys.includes('secret_names') && !secretPresence(ctx, next.secret_names).ok) throw new ApiError(409, 'payee_secret_missing', 'A secret name is not in the platform store.');
@@ -238,7 +261,7 @@ export async function editPayee(ctx, id, changes = {}) {
 
 /** One move of the state machine. Activate needs all three secret names present in the platform store. */
 async function move(ctx, id, to) {
-  gate(ctx);
+  await gate(ctx);
   ownerOnly(ctx);
   return ctx.db.tx(async (db) => {
     const c = { ...ctx, db };
@@ -261,7 +284,7 @@ export const retirePayee = (ctx, id) => move(ctx, id, 'retired');
 
 /** Read-only check, safe to show: which names are present. Never a value. */
 export async function checkPayeeSecrets(ctx, id) {
-  gate(ctx);
+  await gate(ctx);
   const r = secretPresence(ctx, JSON.parse((await load(ctx, id)).secret_names));
   return { payee_id: id, ok: r.ok, found: r.found, missing: r.missing };
 }

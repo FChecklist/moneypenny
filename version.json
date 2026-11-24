@@ -1,15 +1,22 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-24T21:30:00Z",
+  "preparedAt": "2026-11-25T00:00:00Z",
   "preparedAtIST": "2026-11-25T03:00:00+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.6",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T00:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 3 audit fixes on payee accounts F1-F2, dark. The secret names of a retired payee stay reserved for ever (any gateway, mode or role). While the registry flag is on, every call is refused with payee_setup_incomplete (409) if an active payee has no secret names (the legacy payee ships that way); the message says an owner must fill in the secret names first, and an owner edit that sets only the secret names of that payee is the one way out. A test shows the payee change and its audit row commit or roll back together. The bank digit rule is still 9 to 18 digits everywhere, except address_lines, number_prefix and receipt_text, where a run of exactly 6 (PIN) or 10 (phone) is allowed but any other run of 9 or more, or 6 or more digits near the words account, a/c, ifsc or iban, is refused. No money behaviour changed, nothing deployed, no flag changed."
+    },
     {
       "version": "0.2.5",
       "status": "prepared, not deployed",
