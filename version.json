@@ -1,15 +1,22 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-22T10:55:21Z",
-  "preparedAtIST": "2026-11-22T16:25:21+05:30",
+  "preparedAt": "2026-11-24T20:55:12Z",
+  "preparedAtIST": "2026-11-25T02:25:12+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.3",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-24T20:55:12Z",
+      "releasedAt": null,
+      "notes": "Payee accounts, chunks F1 and F2, dark. New migration 0005 adds the payee tables and the new order columns, and back-fills every existing order, payment and tenant to the payee in use today. New src/payees.js holds the registry (create, edit, draft to active to paused to retired, identity lock after the first order, secret-name checks that never store or return a secret value). It refuses to run unless MNP_PAYEE_ACCOUNTS is 1, which is off by default, and nothing calls it yet. Credits, lots, entries and the ledger chain are unchanged. The contract file gained the new error codes. No money behaviour changed, nothing deployed, no flag changed."
+    },
     {
       "version": "0.2.2",
       "status": "prepared, not deployed",

@@ -2,6 +2,15 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.3 (prepared 2026-11-25T02:25:12 IST; NOT deployed yet)
+
+Payee accounts, chunks F1 and F2 of the payee design. Dark: nothing calls the new code and the flag `MNP_PAYEE_ACCOUNTS` is off by default. Live code is still 0.1.0. No money behaviour changed, no flag changed, nothing deployed.
+
+- Migration `0005_payee_accounts.sql`: tables `payee_account`, `payee_route`, `payee_change`, `payee_audit`, `payee_event`, `reconcile_run`; new columns on `purchase_order` and `verified_payment`. Back-fill: every old order and payment points at `pay_legacy_itservices`, and every tenant gets a `*` route to it. The `lot` and `entry` tables are untouched.
+- `src/payees.js`: create, edit, state machine, identity lock, validators, secret-name check. Only secret NAMES are stored; a pasted value is refused and never echoed.
+- `contract/v1/openapi.json` regenerated (new error codes only).
+- Not in this step: routing, order snapshot, adapters, owner key, audit writes for payee changes, health (F3 to F9).
+
 ## 0.2.2 (prepared 2026-11-22T16:25:21 IST; NOT deployed yet)
 
 Second fix round on the go-live plan, after audit 1 of 0.2.1 said FAIL (one Medium, docs only; audit 2 passed). Live code is still 0.1.0. Nothing is turned on, no money flag changed, nothing deployed, no source code changed.

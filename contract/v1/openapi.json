@@ -76,6 +76,10 @@
       "status": 400,
       "meaning": "The ask is missing something or is not valid."
     },
+    "bad_currencies": {
+      "status": 400,
+      "meaning": "currencies must be a list of INR and/or USD."
+    },
     "bad_currency": {
       "status": 400,
       "meaning": "Payment is in INR or USD only."
@@ -83,6 +87,14 @@
     "bad_email": {
       "status": 400,
       "meaning": "… is not a valid e-mail address."
+    },
+    "bad_field": {
+      "status": 400,
+      "meaning": "… is needed."
+    },
+    "bad_gateway": {
+      "status": 400,
+      "meaning": "gateway is not a known payment gateway."
     },
     "bad_idempotency_key": {
       "status": 400,
@@ -92,6 +104,10 @@
       "status": 400,
       "meaning": "Body must be JSON."
     },
+    "bad_mode": {
+      "status": 400,
+      "meaning": "mode must be test or live."
+    },
     "bad_request": {
       "status": 400,
       "meaning": "decision must be approve or reject."
@@ -100,6 +116,10 @@
       "status": 400,
       "meaning": "event_type: lower-case letters, digits, underscore."
     },
+    "bad_secret_names": {
+      "status": 400,
+      "meaning": "secret_names must give key_id, key_secret and webhook_secret."
+    },
     "bad_setting": {
       "status": 400,
       "meaning": "…: …"
@@ -107,6 +127,10 @@
     "bad_signature": {
       "status": 401,
       "meaning": "Signature not accepted."
+    },
+    "bad_transition": {
+      "status": 409,
+      "meaning": "A … payee cannot become …."
     },
     "bad_url": {
       "status": 400,
@@ -180,6 +204,10 @@
       "status": 400,
       "meaning": "Send an Idempotency-Key header (up to 120 characters)."
     },
+    "identity_locked": {
+      "status": 409,
+      "meaning": "This payee has had an order. Name, gateway, secret names and currencies cannot change. Make a new payee."
+    },
     "insufficient_credits": {
       "status": 402,
       "meaning": "Not enough credits for this."
@@ -191,6 +219,10 @@
     "ledger_mismatch": {
       "status": 500,
       "meaning": "Could not give credits back."
+    },
+    "mode_fixed": {
+      "status": 409,
+      "meaning": "The mode is fixed at creation. Make a new payee."
     },
     "more_than_convertible": {
       "status": 422,
@@ -276,6 +308,26 @@
       "status": 503,
       "meaning": "The global off-switch has this service (or its reads or writes) switched off."
     },
+    "payee_exists": {
+      "status": 409,
+      "meaning": "A payee with the same name or key name already exists for this gateway and mode."
+    },
+    "payee_not_found": {
+      "status": 404,
+      "meaning": "No such payee."
+    },
+    "payee_retired": {
+      "status": 409,
+      "meaning": "A retired payee cannot be changed."
+    },
+    "payee_secret_missing": {
+      "status": 409,
+      "meaning": "A secret name is not in the platform store."
+    },
+    "payees_disabled": {
+      "status": 503,
+      "meaning": "Payee accounts are not turned on."
+    },
     "payment_already_used": {
       "status": 409,
       "meaning": "That payment was already used."
@@ -343,6 +395,10 @@
     "sale_reversed": {
       "status": 422,
       "meaning": "The sale was taken back."
+    },
+    "secret_value_refused": {
+      "status": 400,
+      "meaning": "… must be the NAME of a platform secret (capital letters, digits, underscore). Never paste a secret value."
     },
     "stale_timestamp": {
       "status": 401,
