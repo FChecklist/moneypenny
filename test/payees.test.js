@@ -7,6 +7,10 @@ import { doDb } from '../src/do.js';
 import { fakeStorage } from './do-storage.js';
 import { MIGRATIONS } from '../src/migrations.gen.js';
 import * as P from '../src/payees.js';
+import { ADAPTERS } from '../src/gateways/index.js';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const mkDb = () => (process.env.MNP_DB === 'do' ? doDb(fakeStorage()) : openDb());
 const old = () => readMigrationFiles().filter(([f]) => f < '0005');
@@ -135,7 +139,8 @@ test('F2-f: identity is locked after the first order; text still changes and bum
   assert.equal((await P.editPayee(ctx, p.payee_id, { legal_name: 'New Legal', currencies: ['INR', 'USD'] })).version, 3); // still free before any order
   assert.equal(await code(P.editPayee(ctx, p.payee_id, { mode: 'live' })), 'mode_fixed'); // never, even with no order
   await addOrder(s, p.payee_id);
-  for (const ch of [{ legal_name: 'Other' }, { gateway: 'stripe' }, { currencies: ['USD'] }, { secret_names: { ...NAMES, key_id: 'MNP_OTHER_ID' } }]) {
+  // The gateway cannot be tried here: only gateways with an adapter can be named and there is one today, so it is not changed. The other identity fields are.
+  for (const ch of [{ legal_name: 'Other' }, { currencies: ['USD'] }, { secret_names: { ...NAMES, key_id: 'MNP_OTHER_ID' } }]) {
     assert.equal(await code(P.editPayee(ctx, p.payee_id, ch)), 'identity_locked', JSON.stringify(ch));
   }
   const ok = await P.editPayee(ctx, p.payee_id, { invoice: { footer: 'Thanks' }, legal_name: 'New Legal' }); // same value is not a change
@@ -366,7 +371,7 @@ test('R3-1: secret names of a retired payee stay reserved', async () => {
   const p = await mkActive(ctx);
   await P.retirePayee(ctx, p.payee_id);
   assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Other Name' }))), 'payee_exists'); // same names
-  assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Other Name', mode: 'live', gateway: 'stripe' }))), 'payee_exists'); // other gateway and mode too
+  assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Other Name', mode: 'live' }))), 'payee_exists'); // other mode too
   const moved = { key_id: 'MNP_NEW_KEY_ID', key_secret: NAMES.key_secret, webhook_secret: 'MNP_NEW_WEBHOOK' }; // one reused name is enough
   assert.equal(await code(P.createPayee(ctx, input({ legal_name: 'Other Name', secret_names: moved }))), 'payee_exists');
   const fresh = await P.createPayee(ctx, input({ legal_name: 'Other Name', secret_names: { key_id: 'MNP_N_KEY_ID', key_secret: 'MNP_N_KEY_SECRET', webhook_secret: 'MNP_N_WEBHOOK' } }));
@@ -487,7 +492,7 @@ test('R4-2: a corrupt secret_names row does not brick the registry', async () =>
 test('R4-3: first fill on a payee with orders still runs the name rules and clash; only the lock is skipped', async () => {
   const { s, ctx } = await reg({ env: { ...VALUES, ...BAD_ENV } }, { fillLegacy: false });
   await addOrder(s, 'pay_legacy_itservices');
-  const other = await s.db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_o','Other','Other','stripe','test',?, 'retired','[\"INR\"]',1,'x',1,1)", JSON.stringify(N2));
+  const other = await s.db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_o','Other','Other','no_adapter_gw','test',?, 'retired','[\"INR\"]',1,'x',1,1)", JSON.stringify(N2));
   assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: N2 })), 'payee_exists'); // retired payee's names
   await s.db.run("UPDATE payee_account SET status = 'paused' WHERE payee_id = 'pay_o'");
   assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: N2 })), 'payee_exists'); // live payee's names
@@ -529,7 +534,7 @@ test('R4-6: the guarded back-fill can be re-run on a migrated copy without dupli
   migrate(db, MIGRATIONS);
   // after migration an owner edits things the back-fill must never touch again
   await db.run("UPDATE payee_account SET secret_names = '{\"k\":1}', note = 'edited' WHERE payee_id = 'pay_legacy_itservices'");
-  await db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_n','N','N','stripe','test','{}','draft','[\"INR\"]',1,'x',1,1)");
+  await db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_n','N','N','no_adapter_gw','test','{}','draft','[\"INR\"]',1,'x',1,1)");
   await db.run("UPDATE purchase_order SET payee_id = 'pay_n', mode = 'test', payee_version = 7 WHERE id = 'o1'");
   const sql = readFileSync(new URL('../migrations/0005_payee_accounts.sql', import.meta.url), 'utf8');
   db.exec(sql.slice(sql.indexOf('-- Back-fill')));
@@ -538,4 +543,55 @@ test('R4-6: the guarded back-fill can be re-run on a migrated copy without dupli
   const o = await db.first("SELECT payee_id, mode, payee_version FROM purchase_order WHERE id = 'o1'");
   assert.deepEqual({ ...o }, { payee_id: 'pay_n', mode: 'test', payee_version: 7 });
   assert.equal((await db.first('SELECT COUNT(*) n FROM payee_route')).n, 1);
+});
+
+// ---- round 8 ----
+// Owner rule: nothing may name a gateway that has no adapter. Today that is every gateway but razorpay. The names are built from pieces here
+// so that no file in the repo has to spell them out.
+const OTHER_GATEWAYS = ['stri' + 'pe', 'cash' + 'free', 'manual_' + 'bank'];
+test('R8-5: the gateway list is built from the adapters; a payee with a gateway that has no adapter cannot be stored, and the refusal names no gateway', async () => {
+  const { s, ctx } = await reg();
+  assert.deepEqual(P.GATEWAYS, Object.keys(ADAPTERS)); // built from the adapter registry, not typed in
+  assert.deepEqual(P.GATEWAYS, ['razorpay']);
+  assert.ok(Object.isFrozen(P.GATEWAYS)); // shared list: no test or code can add to it
+  assert.throws(() => P.GATEWAYS.push('x'), TypeError);
+  assert.deepEqual(P.GATEWAYS, ['razorpay']);
+  const rows = async () => [(await s.db.first('SELECT COUNT(*) n FROM payee_account')).n, (await s.db.first('SELECT COUNT(*) n FROM payee_audit')).n];
+  const before = await rows();
+  // 'fake' is a test double in src/gateways but not in ADAPTERS; the others have no adapter at all; the rest are wrong spellings and wrong types
+  const tried = [...OTHER_GATEWAYS, 'fake', 'nope', 'Razorpay', 'razorpay ', '', null, 7];
+  for (const gateway of tried) {
+    await assert.rejects(P.createPayee(ctx, input({ gateway })), (e) => {
+      assert.equal(e.code, 'bad_gateway', JSON.stringify(gateway));
+      assert.equal(e.status, 400);
+      const msg = String(e.message).toLowerCase();
+      for (const name of [...OTHER_GATEWAYS, 'fake']) assert.ok(!msg.includes(name), `the refusal names a gateway: ${name}`);
+      if (typeof gateway === 'string' && gateway) assert.ok(!msg.includes(gateway.toLowerCase()), 'the refusal echoes the value it was given');
+      return true;
+    });
+  }
+  assert.deepEqual(await rows(), before); // nothing was stored, nothing was audited
+  // an edit cannot move a payee to one either
+  const p = await P.createPayee(ctx, input());
+  for (const gateway of OTHER_GATEWAYS) await assert.rejects(P.editPayee(ctx, p.payee_id, { gateway }), (e) => e.code === 'bad_gateway');
+  assert.equal((await P.getPayee(ctx, p.payee_id)).gateway, 'razorpay');
+});
+
+test('R8-5: no file that ships names a gateway without an adapter', () => {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const skip = new Set(['node_modules', '.git', '.data', 'test']); // this test folder names them only to check for them
+  const hits = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      if (skip.has(name)) continue;
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (/\.(js|json|md|sql|html|toml|txt|yml|yaml)$/i.test(name)) {
+        const text = readFileSync(path, 'utf8').toLowerCase();
+        for (const g of OTHER_GATEWAYS) if (text.includes(g)) hits.push(`${path.slice(root.length)}: ${g}`);
+      }
+    }
+  };
+  walk(root);
+  assert.deepEqual(hits, []);
 });

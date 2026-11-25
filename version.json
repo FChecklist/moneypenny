@@ -1,15 +1,36 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.12",
+  "version": "0.2.15",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-25T10:00:00Z",
-  "preparedAtIST": "2026-11-25T15:30:00+05:30",
+  "preparedAt": "2026-11-25T05:56:47Z",
+  "preparedAtIST": "2026-11-25T11:26:47+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.15",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T08:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 9 part A (money path of the payee webhook), dark, nothing deployed, no flag changed, money flag stays OFF. Fix 1: an event for an order that was not known yet is kept as pending_unmatched and answered 409; when the order existed and the same event id was retried, the second write hit the event table's primary key and answered 500, leaving the order unpaid for good. The write is now an upsert that finishes only a pending row (main path and refused path); one credit, rollback on failure and the duplicate answer on a further repeat are unchanged. Fix 2: an order that the sweep timed out (failed, with a gateway order id) was refused by the webhook with 409 order_not_ready, while the confirm route credited the same payment. The webhook now sends it through the same confirm code (amount and currency are checked there), so a late payment is credited once, with an event row and an audit row, and a repeat answers duplicate. Tests: two added (R9-1, R9-2), each fails on the old code. Guards: two added (webhook-pending-upsert, webhook-late-failed-order), 57 in all."
+    },
+    {
+      "version": "0.2.14",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T05:56:47Z",
+      "releasedAt": null,
+      "notes": "Round 8: closes the test gaps and small findings from the round 7 audits of payee accounts, dark, nothing deployed, no flag changed, money flag stays OFF. Tests: the tenant-call nonce cleanup is now checked (a nonce older than the time window but younger than the keep time must survive it), the owner nonce times have no default values in the tests, the webhook contract test checks that recorded carries an order id and duplicate none and checks exact error codes, a reverse check fails when a listed error code is never given by a real call (short explained list), and a check fails on an empty required list anywhere in the contract file. Contract: Payee.secret_names no longer has an empty required list (OpenAPI 3.0.3 does not allow it); file regenerated. Webhook: a payee whose webhook secret is missing was answered 500 with a chained audit row for every well-formed call; it is now counted on the same per-source counter as bad signatures (429 after 20 a minute from one source) and writes at most one audit row per payee per minute; nothing else is written and no money moves. Gateways: the list a payee may name is built from the adapter list, so only razorpay can be stored and no other gateway is named anywhere. Docs: wording corrected. Only the payment-already-applied replay is closed; an ignored outcome can still add one event row and one audit row per fresh event id when a captured signed body is replayed, with no money effect (accepted, open item). Rollback is shown on the local adapter and the Durable Object stand-in, not on real Cloudflare; the first-deploy check stays in STATE.md. Guards: three added (55 in all) and one retargeted."
+    },
+    {
+      "version": "0.2.13",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T04:17:23Z",
+      "releasedAt": null,
+      "notes": "Round 7 fixes for payee accounts, dark, nothing deployed, no flag changed, money flag stays OFF. Rollback is shown by test on the local adapter and the Durable Object stand-in (not on real Cloudflare; the first-deploy check stays in STATE.md): when the credit step throws after the guarded paid update, the order is not left paid and no credit, payment claim, event row or audit row remains (confirm route and webhook), and the retry credits once. A payment id already applied to its order answers duplicate and writes nothing; before, it answered recorded and added an event row and an audit row each time. Only that replay is closed: the event id header is not signed, so a replayed signed body with a fresh event id can still add one event row and one audit row for an ignored outcome (no money effect; accepted, open item). Bad-signature 429 is counted per source and payee instead of per payee, so one flooding source cannot use up the budget of another; a good signature is never counted or refused; the audit row stays one per payee per minute. Owner nonces are kept for the 5 minute window plus 5 minutes of clock margin, counted from the time the call claims. Contract: every payee route now documents its answer, the edit route lists the refusals it really gives, and a new test calls every documented payee route and checks the answer. Guards: one unwatched guard closed (order-paid-once), six added (52 in all at that time); npm run guards now prints progress and takes about 7 minutes on 4 cores. The brief for this round named 0.2.12, but the branch already carried 0.2.12 (round 6), so this is 0.2.13."
+    },
     {
       "version": "0.2.12",
       "status": "prepared, not deployed",

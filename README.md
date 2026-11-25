@@ -29,7 +29,7 @@ Version history: see [CHANGELOG.md](CHANGELOG.md). Going live: [docs/GO-LIVE.md]
 npm test          # runs all tests in memory, a few seconds
 npm run seed      # makes .data/dev.sqlite and a 'demo' tenant; prints keys once
 npm run reconcile # credits still owed, by bucket and tenant
-npm run guards    # removes each safety rule one at a time and checks a test fails (about 2 minutes)
+npm run guards    # removes each safety rule one at a time and checks a test fails (about 7 minutes: one full test run per rule)
 npm run dev       # then open http://localhost:8787/admin and paste the admin key
 ```
 

@@ -506,6 +506,432 @@
       "meaning": "This request is …; it cannot …."
     }
   },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "Payee": {
+        "type": "object",
+        "properties": {
+          "payee_id": {
+            "type": "string"
+          },
+          "legal_name": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "test",
+              "live"
+            ]
+          },
+          "secret_names": {
+            "type": "object",
+            "properties": {
+              "key_id": {
+                "type": "string"
+              },
+              "key_secret": {
+                "type": "string"
+              },
+              "webhook_secret": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "paused",
+              "retired"
+            ]
+          },
+          "currencies": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "INR",
+                "USD"
+              ]
+            }
+          },
+          "checkout": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "invoice": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "version": {
+            "type": "integer"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          },
+          "retired_at": {
+            "type": "integer",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "payee_id",
+          "legal_name",
+          "display_name",
+          "gateway",
+          "mode",
+          "secret_names",
+          "status",
+          "currencies",
+          "checkout",
+          "invoice",
+          "version",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "retired_at",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "PayeeHealth": {
+        "type": "object",
+        "properties": {
+          "payee_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "secrets": {
+            "type": "object",
+            "properties": {
+              "key_id": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "present": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "present"
+                ],
+                "additionalProperties": false
+              },
+              "key_secret": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "present": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "present"
+                ],
+                "additionalProperties": false
+              },
+              "webhook_secret": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "present": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "present"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "key_id",
+              "key_secret",
+              "webhook_secret"
+            ],
+            "additionalProperties": false
+          },
+          "secrets_ok": {
+            "type": "boolean"
+          },
+          "last_webhook_at": {
+            "type": "integer",
+            "nullable": true
+          },
+          "ignored_events": {
+            "type": "integer"
+          },
+          "pending_rail_orders": {
+            "type": "integer"
+          },
+          "oldest_pending_rail_at": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "payee_id",
+          "display_name",
+          "gateway",
+          "mode",
+          "status",
+          "secrets",
+          "secrets_ok",
+          "last_webhook_at",
+          "ignored_events",
+          "pending_rail_orders",
+          "oldest_pending_rail_at"
+        ],
+        "additionalProperties": false
+      },
+      "SecretCheck": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "payee_id": {
+            "type": "string"
+          },
+          "found": {
+            "type": "object",
+            "properties": {
+              "key_id": {
+                "type": "boolean"
+              },
+              "key_secret": {
+                "type": "boolean"
+              },
+              "webhook_secret": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "key_id",
+              "key_secret",
+              "webhook_secret"
+            ],
+            "additionalProperties": false
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "payee_id",
+          "found",
+          "missing"
+        ],
+        "additionalProperties": false
+      },
+      "AuditEntry": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "ts": {
+            "type": "integer"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "action": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "seq",
+          "ts",
+          "actor",
+          "key_id",
+          "action",
+          "detail"
+        ],
+        "additionalProperties": false
+      },
+      "AuditVerify": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "integer"
+          },
+          "broken_at": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "RouteSet": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "closed_route_id": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "ok",
+          "route_id",
+          "closed_route_id"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookAnswer": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "result": {
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookRetry": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "result": {
+            "type": "string"
+          },
+          "retry": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "result",
+          "retry"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
   "paths": {
     "/health": {
       "get": {
@@ -3151,7 +3577,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payees_disabled",
@@ -3161,7 +3586,33 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payees": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Payee"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payees"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3215,7 +3666,30 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3252,7 +3726,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "not_found",
           "payee_forbidden",
@@ -3261,10 +3734,44 @@
           "rate_limited",
           "replayed"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3299,10 +3806,17 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_currencies",
+          "bad_field",
+          "bad_gateway",
           "bad_json",
+          "bad_mode",
+          "bad_secret_names",
+          "bank_detail_refused",
           "forbidden",
           "identity_locked",
           "mode_fixed",
+          "payee_exists",
           "payee_forbidden",
           "payee_not_found",
           "payee_retired",
@@ -3310,12 +3824,47 @@
           "payee_setup_incomplete",
           "payees_disabled",
           "rate_limited",
-          "replayed"
+          "replayed",
+          "secret_value_refused"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3364,10 +3913,58 @@
           "rate_limited",
           "replayed"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          },
+          {
+            "name": "step",
+            "in": "path",
+            "required": true,
+            "description": "activate, pause or retire. Activate also resumes a paused payee.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "activate",
+                "pause",
+                "retire"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3390,7 +3987,7 @@
       "get": {
         "operationId": "ownerPayeeSecrets",
         "summary": "Check which secret names are present",
-        "description": "True or false for each name. Never a value.",
+        "description": "True or false for each name. Never a value. ok is the result of the check: true only when all three names are present. A false answer is still HTTP 200 and carries no error.",
         "x-rw": "read",
         "x-money": false,
         "x-permission-level": "owner",
@@ -3404,7 +4001,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payee_not_found",
@@ -3412,10 +4008,28 @@
           "rate_limited",
           "replayed"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Answered. ok is the result of the check, not of the call: a false answer is still HTTP 200 and has no error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretCheck"
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3452,7 +4066,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payee_not_found",
@@ -3460,10 +4073,44 @@
           "rate_limited",
           "replayed"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "health": {
+                      "$ref": "#/components/schemas/PayeeHealth"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "health"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3517,7 +4164,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteSet"
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3555,17 +4209,61 @@
         "x-untrusted-fields": [],
         "x-error-codes": [
           "bad_field",
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payees_disabled",
           "rate_limited",
           "replayed"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Up to 200. Default 50.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before_seq",
+            "in": "query",
+            "required": false,
+            "description": "Page back from this entry number.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditEntry"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "entries"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3588,7 +4286,7 @@
       "get": {
         "operationId": "ownerPayeeAuditVerify",
         "summary": "Check the owner audit chain",
-        "description": "Says ok or where the chain breaks.",
+        "description": "Says ok or where the chain breaks. ok is the result of the check: false (with broken_at) when the chain is broken. A false answer is still HTTP 200 and carries no error.",
         "x-rw": "read",
         "x-money": false,
         "x-permission-level": "owner",
@@ -3602,7 +4300,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payees_disabled",
@@ -3612,7 +4309,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Answered. ok is the result of the check, not of the call: a false answer is still HTTP 200 and has no error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerify"
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
@@ -3635,7 +4339,7 @@
       "post": {
         "operationId": "payeeWebhook",
         "summary": "Gateway event for one payee",
-        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate. An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee. Final refusals (wrong currency, order already paid with another payment) are stored once as ignored and answer 200. A short amount or an order not yet awaiting payment answers 409 with retry true and the event id is not stored, so the gateway retries. Too many bad calls in a minute answer 429.",
+        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate: the same event id, and also the same payment id for an order already paid with it (nothing is stored then). An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee. Final refusals (wrong currency, order already paid with another payment) are stored once as ignored and answer 200. A short amount or an order not yet awaiting payment answers 409 with retry true and the event id is not stored, so the gateway retries. Too many bad signatures from one source for one payee in a minute answer 429 for that source, and calls for a payee whose webhook secret is missing from the platform store are counted the same way (500, then 429); a good signature is never counted or refused.",
         "x-rw": "write",
         "x-money": true,
         "x-permission-level": "gateway",
@@ -3655,10 +4359,38 @@
           "webhook_bad_signature",
           "webhook_no_event_id"
         ],
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Success. Every answer has ok:true."
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAnswer"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not final: retry is true and the event id is not stored, so the gateway sends it again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookRetry"
+                }
+              }
+            }
           },
           "default": {
             "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
