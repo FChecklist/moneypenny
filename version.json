@@ -1,6 +1,6 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
   "preparedAt": "2026-11-25T06:00:00Z",
@@ -10,6 +10,13 @@
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.10",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T08:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 5 fixes on payee accounts F5-F7, dark. Webhook intake: a retryable refusal (amount short, order not yet awaiting payment, unknown order inside a 10 minute grace window) answers 409 and does NOT store the event id, so the gateway retry is judged again; permanent refusals (wrong payee, currency mismatch, draft payee with no snapshot or a live order, unknown order after the grace window, same payee and gateway order id in two tenants) are stored once as ignored. Order lookup is filtered by payee in the SQL. Bad signatures write at most one chained audit row per payee per minute (with the count of the minute before) and are answered 429 after 20 a minute per payee; good calls are not counted. Owner call nonces are pruned after the 5 minute window and the owner key is limited to 60 calls a minute. The audit order test now checks an explicit newest-first list. No money behaviour changed, nothing deployed, no flag changed."
+    },
     {
       "version": "0.2.9",
       "status": "prepared, not deployed",

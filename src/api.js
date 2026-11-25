@@ -284,6 +284,7 @@ ${raw}`))) return fail();
 
   // Owner calls for the payee registry (F6). Signed with the master secret, like setup: HMAC of time, nonce, method, path and body, 5 minute window,
   // each nonce works once. Every handler is a thin call to a function in payees.js / routes.js, which check the flag and the owner role again.
+  const OWNER_PER_MINUTE = 60;
   async function ownerCall(request, raw, url) {
     const method = request.method.toUpperCase();
     const ts = Number(request.headers.get('x-owner-ts'));
@@ -294,6 +295,15 @@ ${raw}`))) return fail();
     if (!safeEqual(sig, await hmacHex(master, `mnp-owner\n${ts}\n${nonce}\n${method}\n${url.pathname + url.search}\n${raw}`))) return fail();
     const fresh = await db.tx(async (t) => { try { await t.run('INSERT INTO nonce (key_id, nonce, ts) VALUES (?,?,?)', 'owner', nonce, ts); return true; } catch { return false; } });
     if (!fresh) return fail('replayed');
+    // Old owner nonces are pruned (a nonce older than the signature window is refused by the time check anyway), and the owner key is rate limited.
+    const win = Math.floor(now() / 60000);
+    const limited = await db.tx(async (t) => {
+      await t.run("DELETE FROM nonce WHERE key_id = 'owner' AND ts < ?", now() - 5 * 60000);
+      await t.run("INSERT INTO rate_limit (key_id, window, n) VALUES ('owner', ?, 1) ON CONFLICT(key_id, window) DO UPDATE SET n = n + 1", win);
+      await t.run("DELETE FROM rate_limit WHERE key_id = 'owner' AND window < ?", win - 5);
+      return (await t.first("SELECT n FROM rate_limit WHERE key_id = 'owner' AND window = ?", win)).n > OWNER_PER_MINUTE;
+    });
+    if (limited) throw new ApiError(429, 'rate_limited', 'Too many requests. Slow down a little.');
     let b = {};
     if (method !== 'GET') {
       try { b = raw ? JSON.parse(raw) : {}; } catch { throw new ApiError(400, 'bad_json', 'Body must be JSON.'); }

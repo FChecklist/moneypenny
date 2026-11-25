@@ -53,10 +53,15 @@ test('F5: only the owner role may call any payee mutator or the audit view (one 
 
 test('F5: owner audit view lists newest first, verifies, and detects tampering; flag off is 503', async () => {
   const { s, owner } = await world();
+  const t0 = s.now();
+  s.clock.t = t0 + 1000;
   const b = await P.createPayee(owner, payeeBody());
+  s.clock.t = t0 + 2000;
   await P.editPayee(owner, b.payee_id, { note: 'a note' });
+  await P.editPayee(owner, b.payee_id, { note: 'a longer note' }); // same second as the edit before: seq breaks the tie
+  const EXPECT_AUDIT = [[4, t0 + 2000, 'payee.edit'], [3, t0 + 2000, 'payee.edit'], [2, t0 + 1000, 'payee.create'], [1, t0, 'route.set']];
   const v = await P.listPayeeAudit(owner, { limit: 10 });
-  assert.deepEqual(v.entries.map((e) => e.action), ['payee.edit', 'route.set', 'payee.create'].filter((a) => v.entries.some((e) => e.action === a)).length === 3 ? ['payee.edit', 'payee.create', 'route.set'].sort((x, y) => v.entries.findIndex((e) => e.action === x) - v.entries.findIndex((e) => e.action === y)) : []);
+  assert.deepEqual(v.entries.map((e) => [e.seq, e.ts, e.action]), EXPECT_AUDIT); // explicit newest-first list; fails if reversed
   assert.ok(v.entries[0].seq > v.entries[1].seq);
   assert.equal((await P.listPayeeAudit(owner, { limit: 1, before_seq: v.entries[0].seq })).entries.length, 1);
   assert.equal(await code(P.listPayeeAudit(owner, { limit: 0 })), 'bad_field');
@@ -213,19 +218,19 @@ test('F7: unknown order, other event types and bad amounts are stored as ignored
   const w = await world();
   const o = await order(w);
   const none = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: 'order_nobody', amount: 5 }), 'e1');
-  assert.equal(none.body.result, 'unmatched');
+  assert.deepEqual([none.status, none.body.result], [409, 'unmatched_retry']); // inside the grace window: retryable, not final
+  w.s.clock.t += 11 * 60000;
+  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: 'order_nobody', amount: 5 }), 'e1')).body.result, 'unmatched'); // after it: final
   const refund = await hook(w, A, 'LEGACY', JSON.stringify({ event: 'refund.processed', payload: {} }), 'e2');
   assert.equal(refund.body.result, 'not_applicable');
   const junk = await hook(w, A, 'LEGACY', 'not json', 'e3');
   assert.equal(junk.body.result, 'not_applicable');
-  const less = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor - 1 }), 'e4');
-  assert.equal(less.body.result, 'payment_mismatch');
   const cur = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor, currency: 'INR' }), 'e5');
-  assert.equal(cur.body.result, 'payment_mismatch');
+  assert.equal(cur.body.result, 'currency_mismatch');
   assert.equal((await status(w, o.id)).status, 'awaiting_payment');
   assert.equal((await w.s.db.first("SELECT COUNT(*) n FROM purchase_order WHERE status = 'paid'")).n, 0);
-  assert.deepEqual((await evs(w)).map((e) => e.outcome), ['ignored', 'ignored', 'ignored', 'ignored', 'ignored']);
-  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor }), 'e4')).body.result, 'duplicate'); // a stored ignored event is not retried
+  assert.deepEqual((await evs(w)).map((e) => e.outcome), ['ignored', 'ignored', 'ignored', 'ignored']);
+  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor }), 'e5')).body.result, 'duplicate'); // a stored permanent refusal is stored once
   // a missing event id is refused
   const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
   const r = await w.app.fetch(new Request(`http://t.local/v1/webhooks/payee/${A}`, { method: 'POST', body: raw, headers: { 'x-razorpay-signature': await hmacHex(WH('LEGACY'), raw) } }));
@@ -254,4 +259,99 @@ test('F7: a draft payee accepts only test orders; a missing secret is 500 and cr
   // flag off
   const off = await receivePayeeWebhook({ db: w.s.db, now: w.s.now, env: {} }, A, raw2, new Headers()).catch((e) => e);
   assert.equal(off.code, 'payees_disabled');
+});
+
+// ---------------- round 5 ----------------
+test('R5-1: a transient refusal is 409 and not stored; the retry succeeds. A permanent refusal is stored once', async () => {
+  const w = await world();
+  const o = await order(w);
+  const short = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor - 1 }), 't1');
+  assert.deepEqual([short.status, short.body.result, short.body.ok], [409, 'payment_mismatch', false]);
+  assert.equal((await evs(w)).length, 0);
+  const retry = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor }), 't1');
+  assert.deepEqual([retry.status, retry.body.result], [200, 'recorded']);
+  // order not yet awaiting_payment
+  const o2 = await order(w);
+  await w.s.db.run("UPDATE purchase_order SET status = 'pending_rail' WHERE id = ?", o2.id);
+  const raw2 = evBody('payment.captured', { order: o2.rail_order_id, pay: 'pay_W7', amount: o2.amount_minor });
+  assert.equal((await hook(w, A, 'LEGACY', raw2, 't2')).status, 409);
+  await w.s.db.run("UPDATE purchase_order SET status = 'awaiting_payment' WHERE id = ?", o2.id);
+  assert.equal((await hook(w, A, 'LEGACY', raw2, 't2')).body.result, 'recorded');
+  // permanent: currency, stored once
+  const o3 = await order(w);
+  const bad = evBody('payment.captured', { order: o3.rail_order_id, pay: 'pay_W8', amount: o3.amount_minor, currency: 'INR' });
+  assert.equal((await hook(w, A, 'LEGACY', bad, 't3')).status, 200);
+  assert.equal((await hook(w, A, 'LEGACY', bad, 't3')).body.result, 'duplicate');
+  assert.equal((await w.s.db.all("SELECT 1 FROM payee_event WHERE event_id = 't3'")).length, 1);
+});
+
+test('R5-2: order lookup is filtered by payee in the SQL: two tenants sharing a rail order id', async () => {
+  const w = await world();
+  const o = await order(w);
+  await w.s.db.run("INSERT INTO tenant (id, name, status, created_at) SELECT 'other', 'other', status, created_at FROM tenant WHERE id = 'demo'").catch(() => {});
+  const t2 = await w.s.db.first("SELECT id FROM tenant WHERE id != 'demo' LIMIT 1");
+  assert.ok(t2, 'second tenant exists');
+  // a second order of another tenant and another payee shares the same gateway order id
+  const b = await P.createPayee(w.owner, payeeBody());
+  const acc = await w.s.db.first('SELECT account_id FROM purchase_order WHERE id = ?', o.id);
+  const cols = Object.keys(o);
+  const copy = { ...o, id: 'ord_other', tenant_id: t2.id, order_ref: 'x-other', payee_id: b.payee_id, account_id: acc.account_id };
+  await w.s.db.run(`INSERT INTO purchase_order (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((c) => copy[c]));
+  const r = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor }), 'x1');
+  assert.equal(r.body.result, 'recorded');
+  assert.equal((await status(w, o.id)).status, 'paid');
+  assert.equal((await w.s.db.first("SELECT status FROM purchase_order WHERE id = 'ord_other'")).status, 'awaiting_payment'); // the other tenant's order is untouched
+  // the same payee and the same gateway order id in two tenants: nothing is applied, the owner must look
+  const o4 = await order(w);
+  const c4 = { ...o4, id: 'ord_dup', tenant_id: t2.id, order_ref: 'x-dup', account_id: acc.account_id };
+  await w.s.db.run(`INSERT INTO purchase_order (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map((c) => c4[c]));
+  const amb = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o4.rail_order_id, pay: 'pay_W5', amount: o4.amount_minor }), 'x2');
+  assert.equal(amb.body.result, 'ambiguous_order');
+  assert.equal((await status(w, o4.id)).status, 'awaiting_payment');
+});
+
+test('R5-3: a draft payee with an order that has no snapshot (mode null) refuses for good', async () => {
+  const w = await world();
+  const d = await P.createPayee(w.owner, payeeBody());
+  const o = await order(w);
+  await w.s.db.run('UPDATE purchase_order SET payee_id = ?, mode = NULL WHERE id = ?', d.payee_id, o.id);
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const r = await hook(w, d.payee_id, 'PB', raw, 'n1');
+  assert.deepEqual([r.status, r.body.result], [200, 'draft_payee']);
+  assert.equal((await status(w, o.id)).status, 'awaiting_payment');
+  assert.equal((await hook(w, d.payee_id, 'PB', raw, 'n1')).body.result, 'duplicate');
+});
+
+test('R5-4: 100 bad signatures write one audit row per minute and are rate limited', async () => {
+  const w = await world();
+  const o = await order(w);
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const codes = [];
+  for (let i = 0; i < 100; i++) codes.push((await hook(w, A, 'LEGACY', raw, `b${i}`, { sign: false })).status);
+  assert.equal(codes.filter((c) => c === 401).length, 20);
+  assert.equal(codes.filter((c) => c === 429).length, 80);
+  const rows = () => w.s.db.all("SELECT detail FROM payee_audit WHERE action = 'webhook.bad_signature'");
+  assert.equal((await rows()).length, 1);
+  // a good call still works during the flood
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'good')).body.result, 'recorded');
+  // next minute: one more row, and it carries the count of the minute before
+  w.s.clock.t += 60000;
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'b-next', { sign: false })).status, 401);
+  const all = await rows();
+  assert.equal(all.length, 2);
+  assert.equal(JSON.parse(all[1].detail).previous_minute_count, 100);
+});
+
+test('R5-5: owner nonces older than the window are pruned and the owner key is rate limited per minute', async () => {
+  const w = await world();
+  await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'ancient', ?)", w.s.now() - 6 * 60000);
+  await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'recent', ?)", w.s.now() - 60000);
+  assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
+  const left = (await w.s.db.all("SELECT nonce FROM nonce WHERE key_id = 'owner'")).map((r) => r.nonce);
+  assert.ok(!left.includes('ancient') && left.includes('recent'));
+  let limited = 0;
+  for (let i = 0; i < 70; i++) if ((await oc(w, 'GET', '/v1/owner/payees')).status === 429) limited++;
+  assert.ok(limited >= 10);
+  w.s.clock.t += 60000; // next minute: allowed again
+  assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
 });

@@ -2,6 +2,7 @@
 // Order of work: find the payee (unknown: 404 with no detail) -> check the signature with THAT payee's webhook secret on the raw body
 // -> event id seen before for this payee (repeat: 200 duplicate) -> find the order by the gateway order id
 // -> the ORDER SNAPSHOT's payee must be this payee, never whatever payee is routed now -> same code as railConfirm.
+// Permanent refusals are stored as 'ignored' (200). Transient ones (amount short, order not ready, unknown order inside the grace window) answer 409 and store nothing, so the retry is judged again.
 // Events that do not apply (unknown order, other payee, other event type, mismatched amount) are stored as 'ignored' and answered 200,
 // so the gateway stops retrying. They are never applied. A paused or retired payee still accepts payments (money in means credits).
 // A draft payee accepts only test orders. Never a secret value or the raw body in an answer, an audit row or the event table.
@@ -13,6 +14,9 @@ import { railConfirm } from './gate.js';
 import { emit } from './outbox.js';
 
 const MAX_RAW = 65536;
+const BAD_PER_MINUTE = 20;
+const UNMATCHED_GRACE_MS = 10 * 60000; // an event for an order we do not know may just be early; after this it is final
+const TRANSIENT = new Set(['payment_mismatch', 'order_not_ready', 'unmatched_retry']); // retryable: answered 409, event id NOT stored
 // Intake never calls a gateway. The adapter needs a fetch function to be built, so it gets one that always refuses.
 const noNetwork = async () => { throw new Error('no network in webhook intake'); };
 const done = (status, body) => ({ status, body: { ok: status < 400, ...body } });
@@ -40,14 +44,26 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     throw e;
   }
   if (!ev.ok) {
-    await chainRow(ctx, ctx.db, 'webhook.bad_signature', () => ({ payee_id: payee.payee_id }));
+    // A flood of bad calls must not flood the chained log: one row per payee per minute (it carries the count of the minute before),
+    // and past BAD_PER_MINUTE bad calls in a minute the answer is 429. Good signatures are never counted, so a flood cannot block the gateway.
+    const win = Math.floor(ctx.now() / 60000);
+    const key = `whbad:${payee.payee_id}`;
+    await ctx.db.run('INSERT INTO rate_limit (key_id, window, n) VALUES (?,?,1) ON CONFLICT(key_id, window) DO UPDATE SET n = n + 1', key, win);
+    await ctx.db.run('DELETE FROM rate_limit WHERE key_id = ? AND window < ?', key, win - 5);
+    const cur = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', key, win)).n;
+    if (cur > BAD_PER_MINUTE) return done(429, { error: { code: 'rate_limited', message: 'Too many bad calls. Slow down.' } });
+    if (cur === 1) {
+      const before = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', key, win - 1))?.n ?? 0;
+      await chainRow(ctx, ctx.db, 'webhook.bad_signature', () => ({ payee_id: payee.payee_id, window: win, count: cur, previous_minute_count: before }));
+    }
     return done(401, { error: { code: 'webhook_bad_signature', message: 'Signature not accepted.' } });
   }
   if (typeof ev.event_id !== 'string' || !ev.event_id || ev.event_id.length > 120) throw new ApiError(400, 'webhook_no_event_id', 'The event id is missing.');
 
   const body = async (db) => {
     const c = { ...ctx, db };
-    if (await db.first('SELECT 1 x FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id)) return done(200, { result: 'duplicate' });
+    const seen = await db.first('SELECT outcome, received_at FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id);
+    if (seen && seen.outcome !== 'pending_unmatched') return done(200, { result: 'duplicate' });
     const keep = (outcome, orderId) => db.run('INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?)', payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, orderId ?? null, outcome, ctx.now());
     const ignore = async (result, orderId = null, tenantId = null) => {
       await keep('ignored', orderId);
@@ -57,11 +73,24 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     };
     const n = ev.normalized;
     if (!n) return ignore('not_applicable'); // refund, failure or unreadable events: stored, not applied (F8 handles refunds)
-    const orders = await db.all('SELECT * FROM purchase_order WHERE rail_order_id = ?', n.gateway_order_id);
-    if (!orders.length) return ignore('unmatched');
-    const own = orders.find((o) => o.payee_id === payee.payee_id); // the order's own payee (from its snapshot), never the current route
-    if (!own) return ignore('wrong_payee', orders[0].id, orders[0].tenant_id);
-    if (payee.status === 'draft' && own.mode !== 'test') return ignore('draft_payee', own.id, own.tenant_id);
+    // The lookup is filtered by payee in the SQL (the order's own payee from its snapshot, never the current route). The tenant is not known
+    // from a gateway call; if one payee somehow has the same gateway order id in two tenants, nothing is applied.
+    const mine = await db.all('SELECT * FROM purchase_order WHERE rail_order_id = ? AND payee_id = ? LIMIT 2', n.gateway_order_id, payee.payee_id);
+    if (mine.length > 1) return ignore('ambiguous_order');
+    const own = mine[0];
+    if (!own) {
+      const other = await db.first('SELECT id, tenant_id FROM purchase_order WHERE rail_order_id = ? AND payee_id IS NOT ? LIMIT 1', n.gateway_order_id, payee.payee_id); // only to name the refusal; never applied
+      if (other) return ignore('wrong_payee', other.id, other.tenant_id);
+      // unknown order: it may be early. Retryable until the grace window has passed, then final.
+      if (!seen) await db.run('INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?)', payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, null, 'pending_unmatched', ctx.now());
+      if (!seen || ctx.now() - seen.received_at < UNMATCHED_GRACE_MS) return done(409, { result: 'unmatched_retry', retry: true });
+      await db.run("UPDATE payee_event SET outcome = 'ignored', received_at = ? WHERE payee_id = ? AND event_id = ?", ctx.now(), payee.payee_id, ev.event_id);
+      await chainRow(c, db, 'webhook.ignored', () => ({ payee_id: payee.payee_id, reason: 'unmatched', order_id: null }));
+      return done(200, { result: 'unmatched' });
+    }
+    if (payee.status === 'draft' && (own.mode == null || own.mode !== 'test')) return ignore('draft_payee', own.id, own.tenant_id); // no snapshot counts as not live: refused for good
+    if (own.status !== 'paid' && own.status !== 'awaiting_payment') return done(409, { result: 'order_not_ready', retry: true }); // e.g. pending_rail: the event may arrive first
+    if (own.status === 'awaiting_payment' && n.currency !== own.currency) return ignore('currency_mismatch', own.id, own.tenant_id);
     let out;
     try {
       out = await railConfirm({ ...c, tenantId: own.tenant_id }, { order_id: own.id, payment_ref: n.payment_id, paid_minor: n.amount_minor, currency: n.currency });
@@ -77,6 +106,7 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     return await ctx.db.tx(body);
   } catch (e) {
     if (!(e instanceof Refused)) throw e;
+    if (TRANSIENT.has(e.reason)) return done(409, { result: e.reason, retry: true }); // the amount may be fixed or topped up: the event id is not stored
     // amount, currency or "already paid with another payment": nothing was credited. Kept as ignored for the owner to look at.
     return ctx.db.tx(async (db) => {
       if (await db.first('SELECT 1 x FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id)) return done(200, { result: 'duplicate' });

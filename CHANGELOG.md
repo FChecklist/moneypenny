@@ -2,6 +2,17 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.10 (prepared 2026-11-25; NOT deployed yet)
+
+Round 5 fixes for payee accounts F5 to F7. Still dark and not deployed. No money behaviour changed.
+
+- Webhook intake: a retryable refusal (amount short, order not yet awaiting payment, unknown order inside a 10 minute grace window) answers 409 and the event id is NOT stored, so the retry is judged again. Permanent refusals (wrong payee, currency mismatch, draft payee with no snapshot or a live order, unknown order after the grace window, ambiguous order) are stored once as `ignored`.
+- Order lookup by gateway order id is filtered by payee in the SQL.
+- Bad signatures: at most one chained audit row per payee per minute (with the count of the minute before); 429 after 20 a minute per payee. Good calls are not counted.
+- Owner calls: old nonces are pruned; 60 calls a minute for the owner key (429 after).
+- The audit-order test checks an explicit newest-first list.
+- Tests: `test/payee-owner-webhook.test.js` (R5-1 to R5-5).
+
 ## 0.2.9 (prepared 2026-11-25; NOT deployed yet)
 
 Payee accounts, chunks F5, F6 and F7. Dark behind `MNP_PAYEE_ACCOUNTS` and not deployed. The money flag is unchanged (OFF).
