@@ -1,8 +1,9 @@
 // Gateway registry (chunk F4). One adapter builder per gateway name. Unknown gateway: refused, never a default.
 import { ApiError } from '../util.js';
 import { razorpayGateway } from './razorpay.js';
+import { centralGateway, GATEWAY_NAME as CENTRAL } from './itservices-central.js';
 
-export const ADAPTERS = { razorpay: razorpayGateway };
+export const ADAPTERS = { razorpay: razorpayGateway, [CENTRAL]: centralGateway };
 
 /** Adapter for a payee record. Secrets come from the injected reader; HTTP from the injected fetch. */
 export function gatewayFor(payee, { reader, fetch, adapters = ADAPTERS }) {

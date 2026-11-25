@@ -546,16 +546,16 @@ test('R4-6: the guarded back-fill can be re-run on a migrated copy without dupli
 });
 
 // ---- round 8 ----
-// Owner rule: nothing may name a gateway that has no adapter. Today that is every gateway but razorpay. The names are built from pieces here
+// Owner rule: nothing may name a gateway that has no adapter. Today that is every gateway but razorpay and itservices_central. The names are built from pieces here
 // so that no file in the repo has to spell them out.
 const OTHER_GATEWAYS = ['stri' + 'pe', 'cash' + 'free', 'manual_' + 'bank'];
 test('R8-5: the gateway list is built from the adapters; a payee with a gateway that has no adapter cannot be stored, and the refusal names no gateway', async () => {
   const { s, ctx } = await reg();
   assert.deepEqual(P.GATEWAYS, Object.keys(ADAPTERS)); // built from the adapter registry, not typed in
-  assert.deepEqual(P.GATEWAYS, ['razorpay']);
+  assert.deepEqual(P.GATEWAYS, ['razorpay', 'itservices_central']); // 0.2.16: the central IT Services pay service (F10) has an adapter too
   assert.ok(Object.isFrozen(P.GATEWAYS)); // shared list: no test or code can add to it
   assert.throws(() => P.GATEWAYS.push('x'), TypeError);
-  assert.deepEqual(P.GATEWAYS, ['razorpay']);
+  assert.deepEqual(P.GATEWAYS, ['razorpay', 'itservices_central']); // 0.2.16: the central IT Services pay service (F10) has an adapter too
   const rows = async () => [(await s.db.first('SELECT COUNT(*) n FROM payee_account')).n, (await s.db.first('SELECT COUNT(*) n FROM payee_audit')).n];
   const before = await rows();
   // 'fake' is a test double in src/gateways but not in ADAPTERS; the others have no adapter at all; the rest are wrong spellings and wrong types

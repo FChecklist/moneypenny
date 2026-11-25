@@ -2,6 +2,20 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.16 (prepared 2026-11-26; NOT deployed yet)
+
+The central IT Services pay service as a payee gateway (F10 to F13). Dark behind `MNP_PAYEE_ACCOUNTS` and a second flag `MNP_CENTRAL_PAY`, both off. Not wired into the Worker or the signed routes yet. Money flag unchanged (OFF). This section was first written as 0.2.14 on top of 0.2.12; it is now merged on top of 0.2.15 (round 9 of the F1 to F9 fixes, below) and carries the number 0.2.16. The base's own 0.2.13, 0.2.14 and 0.2.15 are below.
+
+- F10: `src/gateways/itservices-central.js`, gateway `itservices_central`: open one order (`POST /api/pay/credit-order`, the Moneypenny order id is the idempotency key, amount and currency must be echoed), verify a checkout (`POST /api/pay/credit-verify`, facts only), liveness (`GET /api/pay/ping`). Site key in the `x-site-key` header, 3500 ms deadline, address from `MNP_CENTRAL_BASE_URL` (plain https origin of a public host). Errors carry no secret, key, address or remote text.
+- F11: `src/payee-rail.js`: `payeeRail`, `selectRail`, `railCanServe`. An order whose own snapshot says central is opened at the central service; other orders go to the old rail unchanged. `src/gate.js`: `buyCredits` asks the rail whether it can serve the order before writing anything; `processRail` passes `{ ctx, order }` to the rail; a plain rail never opens a central payee's order.
+- F12: `src/central-confirm.js`: credits only from the central service's facts (this order, this payment, the person named when the order was made), once, through `railConfirm`, with one chained audit row.
+- F13: `src/central-health.js`: owner only; secret names present true or false, address accepted, service answering.
+- Tests: `test/payee-central.test.js` with `test/fake-central.js` (a stand-in that copies the real validators and status codes). Fifteen guards in `scripts/guards-central.js`. After the merge on 0.2.15: `npm test` passes 445 of 445 (416 on the base plus this branch's own), and the guard check lists 74 guards (59 on the base plus the 15 central ones). Docs: `docs/OWNER-ASK-CENTRAL-PAY-SERVICE.md` (what the owner and IT Services must supply), `docs/PAYEE-CENTRAL-PAY-SERVICE.md`.
+
+### After the first audit round (26 Nov 2026), still 0.2.16
+
+Two audit readers found three open Medium rows each side. Judged row by row: tests now assert the stored outcome (the dark switch leaves the order row, the balance and the audit chain untouched for a real paid proof; a plain rail's retry leaves `rail_order_id` empty and writes no `central.confirmed` row). Judged as not faults, written in `docs/PAYEE-CENTRAL-PAY-SERVICE.md` section 5: no draft-payee check in confirm (a route needs an active payee and a payee never goes back to draft); the payer e-mail is compared with the account e-mail now (no code changes it). The seven central codes in `contract/v1/openapi.json` are there because `scripts/gen-contract.js` lists every `ApiError` code found in `src/` (a test keeps the file equal to its output); no route returns them until the central side is mounted. Known limit, unchanged: `verified_payment.payee_id` stays empty on this path, the same as the webhook path; the order carries the payee.
+
 ## 0.2.15 (prepared 2026-11-25; NOT deployed yet)
 
 Round 9 part A: two bugs in the money path of the payee webhook (`src/webhooks-in.js`). Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). Part B (docs, test hygiene, contract) is listed below.

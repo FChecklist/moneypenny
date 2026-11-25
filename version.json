@@ -1,15 +1,22 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-25T05:56:47Z",
-  "preparedAtIST": "2026-11-25T11:26:47+05:30",
+  "preparedAt": "2026-11-25T21:45:00Z",
+  "preparedAtIST": "2026-11-26T03:15:00+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.16",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T21:45:00Z",
+      "releasedAt": null,
+      "notes": "On top of 0.2.15 (first written as 0.2.14 on the older 0.2.12 base; the version number moved because the base took 0.2.13 to 0.2.15 meanwhile): The central IT Services pay service as a dark payee gateway (chunks F10 to F13), built against the real contract of the central service (repository itservices-site, commit 7d3d0b0) and tested with a stand-in for it, not the live service. F10: gateway adapter itservices_central (open an order, verify a checkout, liveness; deadline 3500 ms; errors carry no secret, key or address). F11: payee-aware rail; an order whose own snapshot says central is opened at the central service, every other order goes to the old rail unchanged; a plain rail never opens a central payee's order. F12: confirmation credits only from the central service's facts (order, payment, person, amount, currency), once, through railConfirm. F13: owner-only health, booleans only. Dark behind MNP_PAYEE_ACCOUNTS and a second flag MNP_CENTRAL_PAY, both off; not wired into the Worker or the signed routes yet; nothing deployed, no flag changed, money flag stays OFF. docs/OWNER-ASK-CENTRAL-PAY-SERVICE.md lists exactly what the owner and IT Services must supply."
+    },
     {
       "version": "0.2.15",
       "status": "prepared, not deployed",

@@ -173,6 +173,18 @@
       "status": 422,
       "meaning": "The cash named is more than the noted payment, or in another currency."
     },
+    "central_disabled": {
+      "status": 503,
+      "meaning": "The central payment side is not turned on."
+    },
+    "central_facts_mismatch": {
+      "status": 409,
+      "meaning": "The payment facts do not match this order. Nothing was credited."
+    },
+    "central_payee_retired": {
+      "status": 409,
+      "meaning": "The central payee of this order was retired."
+    },
     "commission_needs_cash": {
       "status": 422,
       "meaning": "Commission can only be a percent of cash received."
@@ -301,6 +313,14 @@
       "status": 409,
       "meaning": "Make the first tenant before setting a rate."
     },
+    "not_central_order": {
+      "status": 409,
+      "meaning": "This order was not made through the central payment side."
+    },
+    "not_central_payee": {
+      "status": 409,
+      "meaning": "This payee does not use the central payment side."
+    },
     "not_found": {
       "status": 404,
       "meaning": "No such route."
@@ -321,6 +341,10 @@
       "status": 409,
       "meaning": "This order already has a hold. Capture or release it first."
     },
+    "order_mismatch": {
+      "status": 409,
+      "meaning": "The payment proof is for another order."
+    },
     "order_ref_used": {
       "status": 409,
       "meaning": "That order reference was used for a different order."
@@ -332,6 +356,10 @@
     "paused_global": {
       "status": 503,
       "meaning": "The global off-switch has this service (or its reads or writes) switched off."
+    },
+    "payee_changed": {
+      "status": 409,
+      "meaning": "The payee of this order is not a central payee any more."
     },
     "payee_exists": {
       "status": 409,
