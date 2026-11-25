@@ -6,7 +6,7 @@ import { createApp } from '../src/api.js';
 import * as P from '../src/payees.js';
 import * as R from '../src/routes.js';
 import { buyCredits, expireOrders } from '../src/gate.js';
-import { receivePayeeWebhook } from '../src/webhooks-in.js';
+import { receivePayeeWebhook, KEEP_SQL } from '../src/webhooks-in.js';
 import { stubRail } from '../src/rail.js';
 import { hmacHex } from '../src/util.js';
 
@@ -732,4 +732,21 @@ test('R9-2: a payment that arrives after the sweep timed the order out is credit
   assert.equal((await status(w, o2.id)).status, 'failed');
   assert.equal(await credits(), 500);
 });
+test('R10-1: the one write for a stored event finishes a pending row and never rewrites a row that is already final', async () => {
+  const w = await world();
+  const o = await order(w);
+  const keep = (id, outcome, orderId, at) => w.s.db.run(KEEP_SQL, A, id, 'payment.captured', orderId, outcome, at);
+  const row = (id) => w.s.db.first('SELECT outcome, order_id, received_at FROM payee_event WHERE payee_id = ? AND event_id = ?', A, id);
+  await keep('k1', 'pending_unmatched', null, 100);
+  assert.deepEqual({ ...(await row('k1')) }, { outcome: 'pending_unmatched', order_id: null, received_at: 100 });
+  await keep('k1', 'recorded', o.id, 200); // the retry finishes the pending row
+  assert.deepEqual({ ...(await row('k1')) }, { outcome: 'recorded', order_id: o.id, received_at: 200 });
+  await keep('k1', 'ignored', null, 300); // a final row is not touched again
+  assert.deepEqual({ ...(await row('k1')) }, { outcome: 'recorded', order_id: o.id, received_at: 200 });
+  await keep('k2', 'ignored', null, 400);
+  await keep('k2', 'recorded', o.id, 500);
+  assert.deepEqual({ ...(await row('k2')) }, { outcome: 'ignored', order_id: null, received_at: 400 }, 'an ignored row stays ignored');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM payee_event WHERE payee_id = ?', A)).n, 2);
+});
+
 const expireOrdersFor = (w) => expireOrders({ ...w.owner });

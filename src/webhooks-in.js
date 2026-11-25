@@ -23,7 +23,7 @@ const TRANSIENT = new Set(['payment_mismatch', 'order_not_ready', 'unmatched_ret
 // Intake never calls a gateway. The adapter needs a fetch function to be built, so it gets one that always refuses.
 const noNetwork = async () => { throw new Error('no network in webhook intake'); };
 // One write for every stored event. A row left as 'pending_unmatched' (the order was not known yet) is turned into the final outcome when the same event id comes back; any other existing row is never touched.
-const KEEP_SQL = "INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?) ON CONFLICT(payee_id, event_id) DO UPDATE SET type = excluded.type, order_id = excluded.order_id, outcome = excluded.outcome, received_at = excluded.received_at WHERE payee_event.outcome = 'pending_unmatched'";
+export const KEEP_SQL = "INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?) ON CONFLICT(payee_id, event_id) DO UPDATE SET type = excluded.type, order_id = excluded.order_id, outcome = excluded.outcome, received_at = excluded.received_at WHERE payee_event.outcome = 'pending_unmatched'";
 const done = (status, body) => ({ status, body: { ok: status < 400, ...body } });
 /**
  * Which counter a call belongs to: the address the hosting layer reports (the Worker runs behind Cloudflare, which sets cf-connecting-ip itself),
@@ -128,8 +128,8 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
       return done(200, { result: 'unmatched' });
     }
     if (payee.status === 'draft' && (own.mode == null || own.mode !== 'test')) return ignore('draft_payee', own.id, own.tenant_id); // no snapshot counts as not live: refused for good
-    // A 'failed' order that has a gateway order id was timed out by the sweep; the money is in, so it is credited like /v1/rail/confirm does (railConfirm checks amount and currency).
-    const lateFailed = own.status === 'failed' && !!own.rail_order_id;
+    // A 'failed' order was timed out by the sweep; the money is in, so it is credited like /v1/rail/confirm does (railConfirm checks amount and currency). The order was found by its gateway order id above, so it always has one.
+    const lateFailed = own.status === 'failed';
     if (own.status !== 'paid' && own.status !== 'awaiting_payment' && !lateFailed) return done(409, { result: 'order_not_ready', retry: true }); // e.g. pending_rail: the event may arrive first
     if ((own.status === 'awaiting_payment' || lateFailed) && n.currency !== own.currency) return ignore('currency_mismatch', own.id, own.tenant_id);
     let out;

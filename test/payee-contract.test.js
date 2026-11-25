@@ -256,7 +256,9 @@ async function reachedCodes() {
       if (method !== 'GET') answers.push(await w.call(method, p, undefined, { raw: 'this is not json' }));
       const busy = await world();
       for (let i = 0; i < 60; i++) await busy.call('GET', '/v1/owner/payees');
-      answers.push(await busy.call(method, p, body));
+      const limited = await busy.call(method, p, body);
+      assert.deepEqual([limited.status, limited.body?.error?.code], [429, 'rate_limited'], `${op.operationId}: the 61st owner call is answered 429 rate_limited before the route is reached`);
+      answers.push(limited);
       answers.forEach((a) => verifyAnswer(op, a)); // each refusal also has the documented error shape and a listed code
       for (const c of codesOf(answers)) got.add(c);
     }
