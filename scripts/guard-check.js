@@ -3,7 +3,7 @@
 // A guard that can be removed without any test noticing is a hole: this script then exits with an error.
 // It never changes your working tree: all edits happen in a temporary copy.
 //
-// Usage:  npm run guards            (all guards, about two minutes)
+// Usage:  npm run guards            (all guards: each one runs the whole test suite once, so about 8 seconds each on 4 cores, about 7 minutes in all)
 //         node scripts/guard-check.js money-idem-required   (one guard by id)
 import { cpSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,6 +33,8 @@ export const GUARDS = [
   ['int-only', 'money fields must be whole numbers', 'src/util.js', 'if (!Number.isInteger(v) || v < min || v > max)', 'if (v < min || v > max)'],
   ['int-max', 'money fields have an upper limit', 'src/util.js', 'if (!Number.isInteger(v) || v < min || v > max)', 'if (!Number.isInteger(v) || v < min)'],
   ['pack-ints', 'pack prices are whole numbers', 'src/settings.js', 'Number.isSafeInteger(value[k]) && value[k] >= 100', 'value[k] >= 100'],
+  ['order-paid-transition', 'the paid step is one guarded update taken before any credit, so two payment ids cannot both credit', 'src/gate.js', " AND status != 'paid'\", payRef", "\", payRef"],
+  ['tx-rollback', 'a request that fails is undone as a whole (rollback), so an order is never left paid without its credits', 'src/db.js', "raw.exec('ROLLBACK');", "raw.exec('COMMIT');"],
   // --- amounts must match
   ['pay-underpaid', 'a payment below the order amount is refused', 'src/gate.js', 'if (paid < o.amount_minor) throw', 'if (false) throw'],
   ['pay-currency', 'a payment in another currency is refused', 'src/gate.js', 'if (b.currency !== o.currency) throw', 'if (false) throw'],
@@ -52,6 +54,10 @@ export const GUARDS = [
   ['key-revoked', 'a revoked key stops working', 'src/auth.js', "!row || row.status !== 'active' || row.tstatus !== 'active' ||", '!row ||'],
   ['key-class', 'a key can only use the routes of its own class', 'src/api.js', 'if (!route[2].includes(auth.scope)) throw', 'if (false) throw'],
   ['setup-replay', 'the owner setup call works once', 'src/api.js', "if (!fresh) return json(403,", "if (false) return json(403,"],
+  ['owner-nonce-keep', 'an owner nonce is kept for the time window plus a clock-skew margin', 'src/api.js', 'now() - OWNER_NONCE_KEEP_MS', 'now() - OWNER_WINDOW_MS'],
+  ['webhook-repeat-payment', 'a payment already applied to its order answers duplicate and writes nothing', 'src/webhooks-in.js', "if (out.already) return done(200, { result: 'duplicate' });", ''],
+  ['webhook-source-limit', 'bad signatures are counted per source, so one flood cannot use up another source\'s budget', 'src/webhooks-in.js', 'const mine = `${all}:${sourceBucket(headers)}`;', 'const mine = `${all}:x`;'],
+  ['webhook-bad-limit-answer', 'too many bad signatures from one source get 429', 'src/webhooks-in.js', 'if (fromSource > BAD_PER_MINUTE) return done(429', 'if (false) return done(429'],
   // --- rate limits and size
   ['rate-limit', 'a key has a calls-per-minute limit', 'src/auth.js', 'if (r.n > limit) return { limited: true };', ''],
   ['rate-limit-answer', 'a limited call gets 429', 'src/api.js', "if (auth.limited) throw", 'if (false) throw'],
@@ -82,8 +88,10 @@ export function main(only) {
   if (base.status !== 0) { console.error('The untouched copy already fails its tests. Fix that first.'); rmSync(dir, { recursive: true, force: true }); return 2; }
   let survived = 0;
   const rows = [];
-  for (const [id, what, file, find, repl] of GUARDS) {
-    if (only && id !== only) continue;
+  const todo = GUARDS.filter(([id]) => !only || id === only);
+  console.error(`The untouched copy passes. Now ${todo.length} guard${todo.length === 1 ? '' : 's'}, one full test run each. Progress is shown here; the result list comes at the end.`);
+  for (const [k, [id, what, file, find, repl]] of todo.entries()) {
+    console.error(`[${k + 1}/${todo.length}] ${id}`);
     const path = join(dir, file);
     const original = readFileSync(path, 'utf8');
     const n = original.split(find).length - 1;

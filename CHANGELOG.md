@@ -2,6 +2,20 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.13 (prepared 2026-11-25; NOT deployed yet)
+
+Round 7 fixes for payee accounts. Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). No credit is made differently: these changes decide what is answered and stored, and prove what was already true.
+
+The brief for this round named the base as 0.2.11 and the new number as 0.2.12. The branch already carried 0.2.12 (round 6), so this round is 0.2.13.
+
+- Rollback proof, no code change (test R7-1): when `creditPurchase` throws after the guarded paid update, both the confirm route and the webhook leave the order unpaid, with no credit, payment claim, event row or audit row, and the retry credits once. A control in the same test shows that the same fault, without a transaction around it, would leave the order paid with no credit.
+- Webhook: a payment id already applied to its order (another event for the same payment, the same signed body sent again with a new event id, or the confirm route got there first) now answers `duplicate` and writes nothing. It answered `recorded` and wrote an event row and an audit row each time; the event id header is not signed, so a replayed body could grow both tables. No second credit was ever made.
+- Webhook bad signatures: the 20-a-minute budget that ends in 429 is now kept per source and payee, not per payee. The source is the `cf-connecting-ip` header that Cloudflare sets, folded into 64 counters per payee; the address is never stored, and without the header all calls share one counter as before. The audit row is still one per payee per minute, with the count of the minute before. A good signature was never counted or refused (tested). Before, one flooding source used up the budget of every other source.
+- Owner calls: a used nonce is kept for the 5 minute window plus 5 minutes of clock margin (10 minutes, counted from the time the call claims), not for exactly the window. Before, a replay could pass if a clock was read behind the machine that had cleaned up. Past-dated and future-dated boundaries and the keep boundary are tested, and a tenant call's own cleanup cannot remove an owner nonce early.
+- Contract: every payee operation documents its answer (OpenAPI `components.schemas`, a `schema` on the answer, path parameters, `limit` and `before_seq` on the owner audit list). The edit route now lists the 8 refusal codes it really gives. The two check routes (`secrets` and `payee_audit/verify`) answer HTTP 200 with `ok` false and no error object when the check fails; this is written down and tested, not changed. `openapi.json` regenerated; the 40 other operations are unchanged.
+- Tests: 408, up from 390. New: `test/payee-contract.test.js` (13: every documented payee route exists and answers with the documented shape), R7-1 to R7-5 in `test/payee-owner-webhook.test.js`. The F7 repeat-event test and R5-5 were changed for the new rules.
+- Guards: at the start of this round `npm run guards` reported one unwatched guard (`order-paid-once`): round 6 made the early paid check redundant for outcomes, so no test noticed its removal. Test R7-5 now watches it. Six guards were added (`order-paid-transition`, `tx-rollback`, `owner-nonce-keep`, `webhook-repeat-payment`, `webhook-source-limit`, `webhook-bad-limit-answer`): 52 in all. The script now prints progress. A full run takes about 7 minutes on 4 cores (one full test run per guard); before, it printed nothing until the end.
+
 ## 0.2.12 (prepared 2026-11-25; NOT deployed yet)
 
 Round 6 fixes for payee accounts. Dark, not deployed. Money flag unchanged (OFF).

@@ -2,7 +2,7 @@
 //   node scripts/gen-contract.js          writes the file
 //   import { buildContract }               used by the test that checks the file is up to date
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { OPS, OWNER_OPS, CLASS_OF_SCOPE } from '../src/contract.js';
+import { OPS, OWNER_OPS, CLASS_OF_SCOPE, SCHEMAS } from '../src/contract.js';
 import { ROUTES } from '../src/api.js';
 
 const root = new URL('../', import.meta.url);
@@ -14,6 +14,7 @@ const QUERY = {
   getCatalogue: [['product', false, 'Only this product.']],
   getHistory: [['email', true, 'The person\'s e-mail address.'], ['limit', false, 'Up to 100.'], ['before_seq', false, 'Page back from this entry number.']],
   adminAudit: [['limit', false, 'Up to 500.']], adminListConversions: [['status', false, 'requested, approved, instructed, paid or rejected.']],
+  ownerPayeeAudit: [['limit', false, 'Up to 200. Default 50.'], ['before_seq', false, 'Page back from this entry number.']],
   adminGetCatalogue: [['product', false, 'Only this product.']], aiApprovals: [['status', false, 'pending, approved, rejected or expired.']], adminListApprovals: [['status', false, 'pending, approved, rejected or expired.']],
 };
 
@@ -31,6 +32,15 @@ export function errorCatalogue() {
   return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
 }
 
+/** Path parameters are written out for the payee routes (owner and gateway levels): the id, and for the step route the three steps. */
+const pathParams = (op) => (op.level === 'owner' || op.level === 'gateway'
+  ? [...op.path.matchAll(/\{([a-z_]+)\}/g)].map((m) => ({
+    name: m[1], in: 'path', required: true,
+    description: m[1] === 'step' ? 'activate, pause or retire. Activate also resumes a paused payee.' : 'The payee id.',
+    schema: m[1] === 'step' ? { type: 'string', enum: ['activate', 'pause', 'retire'] } : { type: 'string', pattern: '^[A-Za-z0-9_]+$' },
+  }))
+  : []);
+
 const scopesFor = (op) => {
   if (op.level === 'owner') return { scopes: [], idem: false, owner: true };
   if (op.level === 'gateway') return { scopes: [], idem: false, owner: false };
@@ -39,6 +49,10 @@ const scopesFor = (op) => {
   if (op.path === '/health') return { scopes: [], idem: false };
   return { scopes: ['admin'], idem: op.method !== 'GET' }; // the three {id} routes
 };
+
+/** The documented answers of an operation by HTTP status: `answers` (several) or `answer` (the 200). Empty for operations that have none written yet. */
+const answersOf = (op) => op.answers ?? (op.answer ? { 200: op.answer } : {});
+const answerContent = (example, schema) => (example || schema ? { content: { 'application/json': { ...(example ? { example } : {}), ...(schema ? { schema } : {}) } } } : {});
 
 export function buildContract() {
   const errors = errorCatalogue();
@@ -58,8 +72,12 @@ export function buildContract() {
       'x-requires-idempotency-key': idem,
       'x-untrusted-fields': op.untrusted ?? [],
       'x-error-codes': [...new Set([...(op.errors ?? []), ...(scopes.length ? ['bad_signature', 'rate_limited', 'wrong_key_type', 'paused', 'paused_global'] : []), ...(idem ? ['idempotency_key_required', 'idempotency_conflict'] : []), ...(op.ai !== 'no' ? ['ai_off'] : [])])].sort(),
-      parameters: (QUERY[op.id] ?? []).map(([name, required, description]) => ({ name, in: 'query', required, description, schema: { type: 'string' } })),
-      responses: { 200: { description: 'Success. Every answer has ok:true.', ...(ex && (ex.response ?? ex.response_ok) ? { content: { 'application/json': { example: ex.response ?? ex.response_ok } } } : {}) }, default: { description: 'Failure. ok:false and error.code is stable; see x-error-codes.', content: { 'application/json': { example: examples.error_shape } } } },
+      parameters: [...pathParams(op), ...(QUERY[op.id] ?? []).map(([name, required, description]) => ({ name, in: 'query', required, description, schema: { type: 'string' } }))],
+      responses: {
+        200: { description: op.okIsResult ? 'Answered. ok is the result of the check, not of the call: a false answer is still HTTP 200 and has no error.' : 'Success. Every answer has ok:true.', ...answerContent(ex && (ex.response ?? ex.response_ok), answersOf(op)[200]) },
+        ...Object.fromEntries(Object.entries(answersOf(op)).filter(([code]) => code !== '200').map(([code, schema]) => [code, { description: op.answerNotes?.[code] ?? 'Answered.', ...answerContent(undefined, schema) }])),
+        default: { description: 'Failure. ok:false and error.code is stable; see x-error-codes.', content: { 'application/json': { example: examples.error_shape } } },
+      },
     };
     if (ex && ex.request && typeof ex.request === 'object' && ex.request.body) o['x-example-request'] = ex.request;
     if (idem) o.parameters.push({ name: 'Idempotency-Key', in: 'header', required: true, description: 'Any unique text up to 120 characters. The same key with the same request returns the first answer.', schema: { type: 'string' } });
@@ -98,6 +116,7 @@ export function buildContract() {
       'Versioned paths: /v1.',
     ],
     'x-error-codes': errors,
+    components: { schemas: SCHEMAS },
     paths,
   };
 }

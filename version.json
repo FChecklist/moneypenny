@@ -1,15 +1,22 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-25T10:00:00Z",
-  "preparedAtIST": "2026-11-25T15:30:00+05:30",
+  "preparedAt": "2026-11-25T04:17:23Z",
+  "preparedAtIST": "2026-11-25T09:47:23+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.13",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T04:17:23Z",
+      "releasedAt": null,
+      "notes": "Round 7 fixes for payee accounts, dark, nothing deployed, no flag changed, money flag stays OFF. Rollback is now proven by test: when the credit step throws after the guarded paid update, the order is not left paid and no credit, payment claim, event row or audit row remains (confirm route and webhook), and the retry credits once. A payment id already applied to its order answers duplicate and writes nothing; before, it answered recorded and added an event row and an audit row each time (the event id header is not signed, so a replayed body could grow both tables). Bad-signature 429 is counted per source and payee instead of per payee, so one flooding source cannot use up the budget of another; a good signature is never counted or refused; the audit row stays one per payee per minute. Owner nonces are kept for the 5 minute window plus 5 minutes of clock margin, counted from the time the call claims. Contract: every payee route now documents its answer, the edit route lists the refusals it really gives, and a new test calls every documented payee route and checks the answer. Guards: one unwatched guard closed (order-paid-once), six added (52 in all); npm run guards now prints progress and takes about 7 minutes on 4 cores. The brief for this round named 0.2.12, but the branch already carried 0.2.12 (round 6), so this is 0.2.13."
+    },
     {
       "version": "0.2.12",
       "status": "prepared, not deployed",
