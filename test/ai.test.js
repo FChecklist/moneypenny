@@ -259,7 +259,7 @@ test('contract: every route is described, flags are complete, and the file is up
       assert.ok(op.operationId && op.summary && op.description, where);
       assert.ok(['read', 'write'].includes(op['x-rw']), where);
       assert.equal(typeof op['x-money'], 'boolean', where);
-      assert.ok(['public', 'read', 'spend', 'purchase', 'admin', 'ai_ask'].includes(op['x-permission-level']), where);
+      assert.ok(['public', 'read', 'spend', 'purchase', 'admin', 'ai_ask', 'owner', 'gateway'].includes(op['x-permission-level']), where);
       assert.ok(['read', 'ask', 'no'].includes(op['x-ai'].access), where);
       assert.equal(op['x-rw'] === 'write', m !== 'get', where);
       if (op['x-ai'].access === 'read') assert.equal(op['x-rw'], 'read', where);

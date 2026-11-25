@@ -22,6 +22,7 @@
     "timestamp": "milliseconds; accepted within 5 minutes; a nonce works once per key",
     "idempotency": "Every POST, PUT and DELETE needs an Idempotency-Key header. Keys starting \"pay:\" are reserved for payment routes and must equal pay:<payment_ref>."
   },
+  "x-owner-signing": "Owner calls (/v1/owner/...) are signed with the master secret, not a key: headers x-owner-ts (ms, within 5 minutes), x-owner-nonce (any unique text up to 100 characters) and x-owner-sig = hex(HMAC-SHA256(master, \"mnp-owner\\n\" + ts + \"\\n\" + nonce + \"\\n\" + METHOD + \"\\n\" + pathWithQuery + \"\\n\" + body)). Each nonce works once. An AI key, an admin key or a product key can never make them. They answer payees_disabled unless MNP_PAYEE_ACCOUNTS is on.",
   "x-key-classes": {
     "read": "Balance, quote and price list only.",
     "spend": "A product server: reserve, capture, release, events, order returns. (Stored as scope \"api\".)",
@@ -72,9 +73,17 @@
       "status": 409,
       "meaning": "This request ran out of time. Ask again."
     },
+    "audit_conflict": {
+      "status": 409,
+      "meaning": "The audit log was busy. Nothing was changed. Try again."
+    },
     "bad_ask": {
       "status": 400,
       "meaning": "The ask is missing something or is not valid."
+    },
+    "bad_currencies": {
+      "status": 400,
+      "meaning": "currencies must be a list of INR and/or USD."
     },
     "bad_currency": {
       "status": 400,
@@ -84,6 +93,14 @@
       "status": 400,
       "meaning": "… is not a valid e-mail address."
     },
+    "bad_field": {
+      "status": 400,
+      "meaning": "… is needed."
+    },
+    "bad_gateway": {
+      "status": 400,
+      "meaning": "gateway is not a known payment gateway."
+    },
     "bad_idempotency_key": {
       "status": 400,
       "meaning": "Keys starting with \"pay:\" are reserved for payment ids."
@@ -91,6 +108,14 @@
     "bad_json": {
       "status": 400,
       "meaning": "Body must be JSON."
+    },
+    "bad_mode": {
+      "status": 400,
+      "meaning": "mode must be test or live."
+    },
+    "bad_product": {
+      "status": 400,
+      "meaning": "product must be small letters, digits and underscore."
     },
     "bad_request": {
       "status": 400,
@@ -100,6 +125,10 @@
       "status": 400,
       "meaning": "event_type: lower-case letters, digits, underscore."
     },
+    "bad_secret_names": {
+      "status": 400,
+      "meaning": "secret_names must give key_id, key_secret and webhook_secret."
+    },
     "bad_setting": {
       "status": 400,
       "meaning": "…: …"
@@ -108,6 +137,10 @@
       "status": 401,
       "meaning": "Signature not accepted."
     },
+    "bad_transition": {
+      "status": 409,
+      "meaning": "A … payee cannot become …."
+    },
     "bad_url": {
       "status": 400,
       "meaning": "Webhook address is not valid."
@@ -115,6 +148,10 @@
     "balance_changed": {
       "status": 409,
       "meaning": "Balance changed. Try again."
+    },
+    "bank_detail_refused": {
+      "status": 400,
+      "meaning": "… looks like a bank detail (account, card, IFSC or IBAN). Bank details are never stored here."
     },
     "below_minimum": {
       "status": 422,
@@ -136,6 +173,18 @@
       "status": 422,
       "meaning": "The cash named is more than the noted payment, or in another currency."
     },
+    "central_disabled": {
+      "status": 503,
+      "meaning": "The central payment side is not turned on."
+    },
+    "central_facts_mismatch": {
+      "status": 409,
+      "meaning": "The payment facts do not match this order. Nothing was credited."
+    },
+    "central_payee_retired": {
+      "status": 409,
+      "meaning": "The central payee of this order was retired."
+    },
     "commission_needs_cash": {
       "status": 422,
       "meaning": "Commission can only be a percent of cash received."
@@ -152,9 +201,17 @@
       "status": 409,
       "meaning": "Only … unspent credits can be refunded."
     },
+    "currency_unsupported": {
+      "status": 422,
+      "meaning": "The payee does not take this currency."
+    },
     "duplicate_ref": {
       "status": 409,
       "meaning": "That reference was already used."
+    },
+    "forbidden": {
+      "status": 403,
+      "meaning": "Not allowed."
     },
     "hold_already_captured": {
       "status": 409,
@@ -180,6 +237,10 @@
       "status": 400,
       "meaning": "Send an Idempotency-Key header (up to 120 characters)."
     },
+    "identity_locked": {
+      "status": 409,
+      "meaning": "This payee has had an order. Name, gateway, secret names and currencies cannot change. Make a new payee."
+    },
     "insufficient_credits": {
       "status": 402,
       "meaning": "Not enough credits for this."
@@ -191,6 +252,10 @@
     "ledger_mismatch": {
       "status": 500,
       "meaning": "Could not give credits back."
+    },
+    "mode_fixed": {
+      "status": 409,
+      "meaning": "The mode is fixed at creation. Make a new payee."
     },
     "more_than_convertible": {
       "status": 422,
@@ -236,6 +301,10 @@
       "status": 404,
       "meaning": "No such purchase."
     },
+    "no_route": {
+      "status": 503,
+      "meaning": "No payee is set up for this product."
+    },
     "no_rule": {
       "status": 404,
       "meaning": "No such rule."
@@ -243,6 +312,14 @@
     "no_tenant": {
       "status": 409,
       "meaning": "Make the first tenant before setting a rate."
+    },
+    "not_central_order": {
+      "status": 409,
+      "meaning": "This order was not made through the central payment side."
+    },
+    "not_central_payee": {
+      "status": 409,
+      "meaning": "This payee does not use the central payment side."
     },
     "not_found": {
       "status": 404,
@@ -264,6 +341,10 @@
       "status": 409,
       "meaning": "This order already has a hold. Capture or release it first."
     },
+    "order_mismatch": {
+      "status": 409,
+      "meaning": "The payment proof is for another order."
+    },
     "order_ref_used": {
       "status": 409,
       "meaning": "That order reference was used for a different order."
@@ -275,6 +356,50 @@
     "paused_global": {
       "status": 503,
       "meaning": "The global off-switch has this service (or its reads or writes) switched off."
+    },
+    "payee_changed": {
+      "status": 409,
+      "meaning": "The payee of this order is not a central payee any more."
+    },
+    "payee_exists": {
+      "status": 409,
+      "meaning": "A secret name was used by a retired payee. A retired payee\\"
+    },
+    "payee_forbidden": {
+      "status": 403,
+      "meaning": "Only the owner can …."
+    },
+    "payee_gateway_taken": {
+      "status": 409,
+      "meaning": "Another payee is active for this gateway and mode. Pause or retire it first."
+    },
+    "payee_not_active": {
+      "status": 409,
+      "meaning": "A route can point only to an active payee."
+    },
+    "payee_not_found": {
+      "status": 404,
+      "meaning": "No such payee."
+    },
+    "payee_retired": {
+      "status": 409,
+      "meaning": "A retired payee cannot be changed."
+    },
+    "payee_secret_missing": {
+      "status": 409,
+      "meaning": "A secret name is not in the platform store."
+    },
+    "payee_setup_incomplete": {
+      "status": 409,
+      "meaning": "An active payee has no secret names. An owner must fill in the secret names first. Payee: …."
+    },
+    "payee_unavailable": {
+      "status": 503,
+      "meaning": "No payee can take this order now."
+    },
+    "payees_disabled": {
+      "status": 503,
+      "meaning": "Payee accounts are not turned on."
     },
     "payment_already_used": {
       "status": 409,
@@ -336,6 +461,10 @@
       "status": 401,
       "meaning": "This request was already used."
     },
+    "route_overlap": {
+      "status": 409,
+      "meaning": "Another route for this product overlaps that time."
+    },
     "rule_exists": {
       "status": 409,
       "meaning": "A rule for this event already exists. Edit it instead."
@@ -344,6 +473,10 @@
       "status": 422,
       "meaning": "The sale was taken back."
     },
+    "secret_value_refused": {
+      "status": 400,
+      "meaning": "… must be the NAME of a platform secret (capital letters, digits, underscore). Never paste a secret value."
+    },
     "stale_timestamp": {
       "status": 401,
       "meaning": "Timestamp is too old or too new."
@@ -351,6 +484,10 @@
     "status_unknown": {
       "status": 503,
       "meaning": "AI access needs an off-switch source and none is set."
+    },
+    "tenant_not_found": {
+      "status": 404,
+      "meaning": "No such tenant."
     },
     "too_large": {
       "status": 413,
@@ -380,6 +517,14 @@
       "status": 401,
       "meaning": "Signed headers are missing."
     },
+    "webhook_bad_signature": {
+      "status": 401,
+      "meaning": "The gateway signature was not accepted."
+    },
+    "webhook_no_event_id": {
+      "status": 400,
+      "meaning": "The event id is missing."
+    },
     "wrong_key_type": {
       "status": 403,
       "meaning": "This key cannot use this route."
@@ -387,6 +532,432 @@
     "wrong_state": {
       "status": 409,
       "meaning": "This request is …; it cannot …."
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "Payee": {
+        "type": "object",
+        "properties": {
+          "payee_id": {
+            "type": "string"
+          },
+          "legal_name": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "test",
+              "live"
+            ]
+          },
+          "secret_names": {
+            "type": "object",
+            "properties": {
+              "key_id": {
+                "type": "string"
+              },
+              "key_secret": {
+                "type": "string"
+              },
+              "webhook_secret": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "paused",
+              "retired"
+            ]
+          },
+          "currencies": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "INR",
+                "USD"
+              ]
+            }
+          },
+          "checkout": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "invoice": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          "version": {
+            "type": "integer"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer"
+          },
+          "updated_at": {
+            "type": "integer"
+          },
+          "retired_at": {
+            "type": "integer",
+            "nullable": true
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "payee_id",
+          "legal_name",
+          "display_name",
+          "gateway",
+          "mode",
+          "secret_names",
+          "status",
+          "currencies",
+          "checkout",
+          "invoice",
+          "version",
+          "created_by",
+          "created_at",
+          "updated_at",
+          "retired_at",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "PayeeHealth": {
+        "type": "object",
+        "properties": {
+          "payee_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "gateway": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "secrets": {
+            "type": "object",
+            "properties": {
+              "key_id": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "present": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "present"
+                ],
+                "additionalProperties": false
+              },
+              "key_secret": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "present": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "present"
+                ],
+                "additionalProperties": false
+              },
+              "webhook_secret": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "present": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "name",
+                  "present"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "key_id",
+              "key_secret",
+              "webhook_secret"
+            ],
+            "additionalProperties": false
+          },
+          "secrets_ok": {
+            "type": "boolean"
+          },
+          "last_webhook_at": {
+            "type": "integer",
+            "nullable": true
+          },
+          "ignored_events": {
+            "type": "integer"
+          },
+          "pending_rail_orders": {
+            "type": "integer"
+          },
+          "oldest_pending_rail_at": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "payee_id",
+          "display_name",
+          "gateway",
+          "mode",
+          "status",
+          "secrets",
+          "secrets_ok",
+          "last_webhook_at",
+          "ignored_events",
+          "pending_rail_orders",
+          "oldest_pending_rail_at"
+        ],
+        "additionalProperties": false
+      },
+      "SecretCheck": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "payee_id": {
+            "type": "string"
+          },
+          "found": {
+            "type": "object",
+            "properties": {
+              "key_id": {
+                "type": "boolean"
+              },
+              "key_secret": {
+                "type": "boolean"
+              },
+              "webhook_secret": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "key_id",
+              "key_secret",
+              "webhook_secret"
+            ],
+            "additionalProperties": false
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "payee_id",
+          "found",
+          "missing"
+        ],
+        "additionalProperties": false
+      },
+      "AuditEntry": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer"
+          },
+          "ts": {
+            "type": "integer"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "action": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "seq",
+          "ts",
+          "actor",
+          "key_id",
+          "action",
+          "detail"
+        ],
+        "additionalProperties": false
+      },
+      "AuditVerify": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "entries": {
+            "type": "integer"
+          },
+          "broken_at": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false
+      },
+      "RouteSet": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "closed_route_id": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "ok",
+          "route_id",
+          "closed_route_id"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookAnswer": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "result": {
+            "type": "string"
+          },
+          "order_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "WebhookRetry": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "result": {
+            "type": "string"
+          },
+          "retry": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "result",
+          "retry"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "paths": {
@@ -3013,6 +3584,856 @@
           "path": "/v1/admin/approvals/apr_.../approve",
           "key": "admin",
           "body": {}
+        }
+      }
+    },
+    "/v1/owner/payees": {
+      "get": {
+        "operationId": "ownerListPayees",
+        "summary": "List payees",
+        "description": "Every payee with status, gateway, mode and the NAMES of its secrets. Never a secret value.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "forbidden",
+          "payee_forbidden",
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payees": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Payee"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payees"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "ownerCreatePayee",
+        "summary": "Add a payee as a draft",
+        "description": "Secret NAMES only. A pasted secret value or a bank detail is refused.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_currencies",
+          "bad_field",
+          "bad_gateway",
+          "bad_json",
+          "bad_mode",
+          "bad_secret_names",
+          "bank_detail_refused",
+          "forbidden",
+          "payee_exists",
+          "payee_forbidden",
+          "payee_setup_incomplete",
+          "payees_disabled",
+          "rate_limited",
+          "replayed",
+          "secret_value_refused"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payees/{id}": {
+      "get": {
+        "operationId": "ownerGetPayee",
+        "summary": "Read one payee",
+        "description": "One payee record.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "forbidden",
+          "not_found",
+          "payee_forbidden",
+          "payee_not_found",
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "ownerEditPayee",
+        "summary": "Change a payee",
+        "description": "Name, gateway, secret names and currencies lock after the first order.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_currencies",
+          "bad_field",
+          "bad_gateway",
+          "bad_json",
+          "bad_mode",
+          "bad_secret_names",
+          "bank_detail_refused",
+          "forbidden",
+          "identity_locked",
+          "mode_fixed",
+          "payee_exists",
+          "payee_forbidden",
+          "payee_not_found",
+          "payee_retired",
+          "payee_secret_missing",
+          "payee_setup_incomplete",
+          "payees_disabled",
+          "rate_limited",
+          "replayed",
+          "secret_value_refused"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payees/{id}/{step}": {
+      "post": {
+        "operationId": "ownerPayeeStep",
+        "summary": "Activate, pause or retire a payee",
+        "description": "step is activate (also resumes a paused payee), pause or retire.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_json",
+          "bad_transition",
+          "forbidden",
+          "payee_forbidden",
+          "payee_gateway_taken",
+          "payee_not_found",
+          "payee_secret_missing",
+          "payee_setup_incomplete",
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          },
+          {
+            "name": "step",
+            "in": "path",
+            "required": true,
+            "description": "activate, pause or retire. Activate also resumes a paused payee.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "activate",
+                "pause",
+                "retire"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "payee": {
+                      "$ref": "#/components/schemas/Payee"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "payee"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payees/{id}/secrets": {
+      "get": {
+        "operationId": "ownerPayeeSecrets",
+        "summary": "Check which secret names are present",
+        "description": "True or false for each name. Never a value. ok is the result of the check: true only when all three names are present. A false answer is still HTTP 200 and carries no error.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "forbidden",
+          "payee_forbidden",
+          "payee_not_found",
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Answered. ok is the result of the check, not of the call: a false answer is still HTTP 200 and has no error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretCheck"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payees/{id}/health": {
+      "get": {
+        "operationId": "ownerPayeeHealth",
+        "summary": "Health of one payee",
+        "description": "Gateway and mode, secret names with present true or false, last gateway event time, count of ignored events, orders waiting in pending_rail. Never a secret value. Writes nothing.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "forbidden",
+          "payee_forbidden",
+          "payee_not_found",
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "health": {
+                      "$ref": "#/components/schemas/PayeeHealth"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "health"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/routes": {
+      "post": {
+        "operationId": "ownerSetRoute",
+        "summary": "Set the payee for a product",
+        "description": "Starts a new route row and closes the open one. Overlap is refused.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_field",
+          "bad_json",
+          "bad_product",
+          "forbidden",
+          "payee_forbidden",
+          "payee_not_active",
+          "payee_not_found",
+          "payee_setup_incomplete",
+          "payees_disabled",
+          "rate_limited",
+          "replayed",
+          "route_overlap",
+          "tenant_not_found"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteSet"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payee_audit": {
+      "get": {
+        "operationId": "ownerPayeeAudit",
+        "summary": "The owner audit log of payees",
+        "description": "Newest first. Ids and field names only.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_field",
+          "forbidden",
+          "payee_forbidden",
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Up to 200. Default 50.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before_seq",
+            "in": "query",
+            "required": false,
+            "description": "Page back from this entry number.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AuditEntry"
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "entries"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payee_audit/verify": {
+      "get": {
+        "operationId": "ownerPayeeAuditVerify",
+        "summary": "Check the owner audit chain",
+        "description": "Says ok or where the chain breaks. ok is the result of the check: false (with broken_at) when the chain is broken. A false answer is still HTTP 200 and carries no error.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "forbidden",
+          "payee_forbidden",
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Answered. ok is the result of the check, not of the call: a false answer is still HTTP 200 and has no error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerify"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/webhooks/payee/{id}": {
+      "post": {
+        "operationId": "payeeWebhook",
+        "summary": "Gateway event for one payee",
+        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate: the same event id, and also the same payment id for an order already paid with it (nothing is stored then). An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee. Final refusals (wrong currency, order already paid with another payment) are stored once as ignored and answer 200. A short amount or an order not yet awaiting payment answers 409 with retry true and the event id is not stored, so the gateway retries. Too many bad signatures from one source for one payee in a minute answer 429 for that source, and calls for a payee whose webhook secret is missing from the platform store are counted the same way (500, then 429); a good signature is never counted or refused.",
+        "x-rw": "write",
+        "x-money": true,
+        "x-permission-level": "gateway",
+        "x-key-classes": [],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "payee_not_found",
+          "payee_secret_missing",
+          "payees_disabled",
+          "rate_limited",
+          "too_large",
+          "webhook_bad_signature",
+          "webhook_no_event_id"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The payee id.",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAnswer"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not final: retry is true and the event id is not stored, so the gateway sends it again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookRetry"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

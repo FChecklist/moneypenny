@@ -2,6 +2,158 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.16 (prepared 2026-11-26; NOT deployed yet)
+
+The central IT Services pay service as a payee gateway (F10 to F13). Dark behind `MNP_PAYEE_ACCOUNTS` and a second flag `MNP_CENTRAL_PAY`, both off. Not wired into the Worker or the signed routes yet. Money flag unchanged (OFF). This section was first written as 0.2.14 on top of 0.2.12; it is now merged on top of 0.2.15 (round 9 of the F1 to F9 fixes, below) and carries the number 0.2.16. The base's own 0.2.13, 0.2.14 and 0.2.15 are below.
+
+- F10: `src/gateways/itservices-central.js`, gateway `itservices_central`: open one order (`POST /api/pay/credit-order`, the Moneypenny order id is the idempotency key, amount and currency must be echoed), verify a checkout (`POST /api/pay/credit-verify`, facts only), liveness (`GET /api/pay/ping`). Site key in the `x-site-key` header, 3500 ms deadline, address from `MNP_CENTRAL_BASE_URL` (plain https origin of a public host). Errors carry no secret, key, address or remote text.
+- F11: `src/payee-rail.js`: `payeeRail`, `selectRail`, `railCanServe`. An order whose own snapshot says central is opened at the central service; other orders go to the old rail unchanged. `src/gate.js`: `buyCredits` asks the rail whether it can serve the order before writing anything; `processRail` passes `{ ctx, order }` to the rail; a plain rail never opens a central payee's order.
+- F12: `src/central-confirm.js`: credits only from the central service's facts (this order, this payment, the person named when the order was made), once, through `railConfirm`, with one chained audit row.
+- F13: `src/central-health.js`: owner only; secret names present true or false, address accepted, service answering.
+- Tests: `test/payee-central.test.js` with `test/fake-central.js` (a stand-in that copies the real validators and status codes). Fifteen guards in `scripts/guards-central.js`. After the merge on 0.2.15: `npm test` passes 445 of 445 (416 on the base plus this branch's own), and the guard check lists 74 guards (59 on the base plus the 15 central ones). Docs: `docs/OWNER-ASK-CENTRAL-PAY-SERVICE.md` (what the owner and IT Services must supply), `docs/PAYEE-CENTRAL-PAY-SERVICE.md`.
+
+### After the first audit round (26 Nov 2026), still 0.2.16
+
+Two audit readers found three open Medium rows each side. Judged row by row: tests now assert the stored outcome (the dark switch leaves the order row, the balance and the audit chain untouched for a real paid proof; a plain rail's retry leaves `rail_order_id` empty and writes no `central.confirmed` row). Judged as not faults, written in `docs/PAYEE-CENTRAL-PAY-SERVICE.md` section 5: no draft-payee check in confirm (a route needs an active payee and a payee never goes back to draft); the payer e-mail is compared with the account e-mail now (no code changes it). The seven central codes in `contract/v1/openapi.json` are there because `scripts/gen-contract.js` lists every `ApiError` code found in `src/` (a test keeps the file equal to its output); no route returns them until the central side is mounted. Known limit, unchanged: `verified_payment.payee_id` stays empty on this path, the same as the webhook path; the order carries the payee.
+
+## 0.2.15 (prepared 2026-11-25; NOT deployed yet)
+
+Round 9 part A: two bugs in the money path of the payee webhook (`src/webhooks-in.js`). Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). Part B (docs, test hygiene, contract) is listed below.
+
+- Early event, then the order exists: an event for an unknown order is stored as `pending_unmatched` and answered 409. When the order existed and the same event id was retried, the plain insert hit the primary key `(payee_id, event_id)` and answered 500; the order stayed `awaiting_payment` with no credits. The write is now an upsert that replaces only a `pending_unmatched` row (normal path, and the refused path). One credit, the rollback on failure and `duplicate` on a further repeat are unchanged. Test R9-1 (409, order appears, same event id gives `recorded` with one credit, repeat gives `duplicate`; the refused path ends as `ignored` with no credit).
+- Late payment after the sweep: an order that `expireOrders` set to `failed` was refused with 409 `order_not_ready` and nothing stored, while the confirm route credited the same payment. A `failed` order with a gateway order id now goes through the same `railConfirm` code (amount and currency are checked there; a currency mismatch is final and ignored, a short amount is 409). The event row and the audit row are written, and a repeat answers `duplicate`. This matches `docs/GO-LIVE.md` and `src/gate.js` ("a late payment is still credited"). Test R9-2 (lock window passes, sweep runs, webhook credits 500 once, repeats are `duplicate`, wrong currency is refused).
+- Part B, test hygiene: `GATEWAYS` in `src/payees.js` is now a frozen array. Test F2-f no longer pushes to and pops from it: it checks the identity lock on the other identity fields (name, currencies, secret names); the gateway field itself cannot be tried while only one adapter exists (the `bad_gateway` check comes first). R8-5 now checks the list is frozen. The two raw SQL inserts in `test/payees.test.js` use a made-up gateway name instead of a real one.
+- Part B, contract: GET owner routes no longer list `bad_json` (a GET has no body). `contract/v1/openapi.json` regenerated; the `NOT_REACHED` entry for it is removed and the contract test now checks that `bad_json` is listed exactly on the routes that have a body.
+- Part B, guards: label of `order-paid-once` now says what test R7-5 checks (a repeat confirm of a paid order is answered before its figures are judged). New guard `payee-gateway-frozen`; `payee-gateway-list` points at the frozen line. Each of the two new part A guards, the two gateway guards and `order-paid-once` was run alone and is caught by a test. Guards in all: 58.
+- Part B, docs: guard count in `docs/GO-LIVE.md` (two places) and `KNOWLEDGE.md` was 58 (59 after part C). The 0.2.14 gateway note and the replay notes (here and in `KNOWLEDGE.md`) list every ignored outcome.
+- Part C (after the round 10 audit): the second half of the late-payment test `&& !!own.rail_order_id` was removed from `src/webhooks-in.js`: the order is found by its gateway order id, so it always has one and the half could change nothing (a guard cannot watch a line that cannot matter). New test R10-1 and new guard `webhook-final-row-kept`: the one write for stored events (`KEEP_SQL`, now exported) finishes a pending row and never rewrites a row that is already final; the test fails when the `WHERE` of the upsert is removed. The contract test now asserts that the 61st owner call on every owner route is answered 429 `rate_limited`.
+- Tests: 416 in the final local run after part C (415 before, plus R10-1). Guards: 59 in all (one added), each watched by a test.
+
+## 0.2.14 (prepared 2026-11-25; NOT deployed yet)
+
+Round 8: closes the test gaps and the small findings from the round 7 audits of payee accounts. Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). No credit is made differently.
+
+- Test R7-4 (owner nonce keep time): step (d) now plants an owner nonce older than the time window but younger than the keep time, runs a tenant-key call, and checks it survives. A tenant cleanup in `src/auth.js` that is too short now fails the test (it did not before). R5-5 and R7-4 no longer have default values for `OWNER_NONCE_KEEP_MS` and `OWNER_WINDOW_MS`: a missing export fails the test.
+- Contract test (`test/payee-contract.test.js`): the webhook case checks that a `recorded` answer has `order_id` and a `duplicate` answer has none, and checks the exact error code of each refusal (`webhook_no_event_id`, `webhook_bad_signature`, `payee_not_found`, `too_large`, `payees_disabled`, `payee_secret_missing`, `rate_limited`). New reverse check: every code in `x-error-codes` of a payee route must be given by a real call in the test or be on a short list (`NOT_REACHED`: `payee_forbidden`, `bad_json` on GET routes, `not_found` on the read route), each with its reason; a stale entry fails. To reach the codes, the cases now make more calls (bad mode, bad currencies, bank detail, pasted secret, identity lock, retired payee, gateway taken, route overlap and others) and every owner route is also tried unsigned, replayed, with the flag off, with a bad body and as the 61st call in a minute. The test header now says the scope: routes and answer shapes are one-way (contract to code), error codes are two-way. Open note: the contract lists `bad_json` for GET routes, which have no body; harmless, left as it is.
+- Contract file: `Payee.secret_names` had `"required": []`, which OpenAPI 3.0.3 does not allow. `obj()` in `src/contract.js` now leaves `required` out when nothing is required; `openapi.json` regenerated (also the webhook text below). A new check fails on an empty `required` list anywhere in the file.
+- Webhook, payee with its secret missing (`src/webhooks-in.js`): every well-formed call wrote a chained audit row and answered 500, and the per-source limit never counted it. It now goes through the same counter as bad signatures (`countFailure`): 500 for the first 20 calls a minute from one source, then 429, and at most one audit row per payee per minute (with the count of the minute before). Nothing else is written: no event row, no order change, no credit. Test R8-4 floods this path (326 calls) and checks the audit rows, the counters and the money state. A caller whose payee secret is missing and who retries fast from one address now gets 429 after 20 calls a minute instead of 500; the call fails either way.
+- Gateways (`src/payees.js`): `GATEWAYS` is now built from the adapter list (`src/gateways/index.js`), so only `razorpay` can be stored, and no shipped file names another gateway (the tests in `test/` name them only to check for them; part B of round 9 builds the two raw SQL inserts there from a made-up name). The refusal (`bad_gateway`, 400) names no gateway. Tests R8-5 (two): a payee with a gateway that has no adapter is refused on create and on edit, nothing is stored or audited, and no shipped file names another gateway. Three older tests that used another gateway name as a stand-in were changed (a second active payee in the routing tests is switched on directly; the identity-lock test adds a made-up name to the list for that test only).
+- Docs: `KNOWLEDGE.md` and the 0.2.13 text above no longer say the replay growth is solved or that rollback is "proven, not assumed". Only the payment-already-applied replay is closed. Ignored outcomes can still add one event row and one chained audit row per fresh event id when a captured signed body is replayed, with no money effect (accepted, open item). Rollback is shown on the local adapter and the Durable Object stand-in, not on real Cloudflare; the first-deploy check stays in `STATE.md`.
+- Tests: 413, up from 408 (R8-4, two R8-5, the reverse check and the empty-`required` check). Guards: three added (`webhook-missing-secret-limit`, `tenant-nonce-cleanup-keep`, `payee-gateway-list`) and `webhook-bad-limit-answer` points at the new code: 55 in all.
+
+## 0.2.13 (prepared 2026-11-25; NOT deployed yet)
+
+Round 7 fixes for payee accounts. Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). No credit is made differently: these changes decide what is answered and stored, and prove what was already true.
+
+The brief for this round named the base as 0.2.11 and the new number as 0.2.12. The branch already carried 0.2.12 (round 6), so this round is 0.2.13.
+
+- Rollback shown by test, no code change (test R7-1): when `creditPurchase` throws after the guarded paid update, both the confirm route and the webhook leave the order unpaid, with no credit, payment claim, event row or audit row, and the retry credits once. A control in the same test shows that the same fault, without a transaction around it, would leave the order paid with no credit. This is shown on the local database adapter and on the Durable Object stand-in (`MNP_DB=do`), not on real Cloudflare. The first-deploy check "rollback on throw" stays in `STATE.md` (Known limits) and must be run on the real runtime.
+- Webhook: a payment id already applied to its order (another event for the same payment, the same signed body sent again with a new event id, or the confirm route got there first) now answers `duplicate` and writes nothing. It answered `recorded` and wrote an event row and an audit row each time. No second credit was ever made. **Only this replay is closed.** The event id header is not signed, so a captured signed body can be sent again with a fresh event id. For the ignored outcomes (`not_applicable`, `draft_payee`, `ambiguous_order`, `unmatched`, `wrong_payee` (which also adds one outbox row, the `payee.webhook_wrong_payee` event), `currency_mismatch`, `order_already_paid`) that can still add one event row and one chained audit row per fresh event id. It has no money effect (no credit, no order change). This is accepted and kept as an open item (see `KNOWLEDGE.md`).
+- Webhook bad signatures: the 20-a-minute budget that ends in 429 is now kept per source and payee, not per payee. The source is the `cf-connecting-ip` header that Cloudflare sets, folded into 64 counters per payee; the address is never stored, and without the header all calls share one counter as before. The audit row is still one per payee per minute, with the count of the minute before. A good signature was never counted or refused (tested). Before, one flooding source used up the budget of every other source.
+- Owner calls: a used nonce is kept for the 5 minute window plus 5 minutes of clock margin (10 minutes, counted from the time the call claims), not for exactly the window. Before, a replay could pass if a clock was read behind the machine that had cleaned up. Past-dated and future-dated boundaries and the keep boundary are tested, and a tenant call's own cleanup cannot remove an owner nonce early.
+- Contract: every payee operation documents its answer (OpenAPI `components.schemas`, a `schema` on the answer, path parameters, `limit` and `before_seq` on the owner audit list). The edit route now lists the 8 refusal codes it really gives. The two check routes (`secrets` and `payee_audit/verify`) answer HTTP 200 with `ok` false and no error object when the check fails; this is written down and tested, not changed. `openapi.json` regenerated; the 40 other operations are unchanged.
+- Tests: 408, up from 390. New: `test/payee-contract.test.js` (13: every documented payee route exists and answers with the documented shape), R7-1 to R7-5 in `test/payee-owner-webhook.test.js`. The F7 repeat-event test and R5-5 were changed for the new rules. (Round 8, 0.2.14, closes gaps in some of these tests.)
+- Guards: at the start of this round `npm run guards` reported one unwatched guard (`order-paid-once`): round 6 made the early paid check redundant for outcomes, so no test noticed its removal. Test R7-5 now watches it. Six guards were added (`order-paid-transition`, `tx-rollback`, `owner-nonce-keep`, `webhook-repeat-payment`, `webhook-source-limit`, `webhook-bad-limit-answer`): 52 in all at that time. The script now prints progress. A full run takes about 7 minutes on 4 cores (one full test run per guard); before, it printed nothing until the end.
+
+## 0.2.12 (prepared 2026-11-25; NOT deployed yet)
+
+Round 6 fixes for payee accounts. Dark, not deployed. Money flag unchanged (OFF).
+
+- `railConfirm` now does one guarded `UPDATE ... WHERE status != 'paid'` before crediting; zero changed rows means already paid (same payment id: repeat answer; other id: `order_already_paid`). Two concurrent events with different payment ids credit once.
+- Webhook: a missing or malformed signature answers 401 before any HMAC, payee lookup or database write. Currency mismatch is a final refusal (200, stored once); an order already paid with another payment is final; a short amount and an order not yet awaiting payment stay 409 retry.
+- Contract: owner operations list `rate_limited`, `bad_json`, `replayed`, `forbidden` (and `not_found`, `bad_transition`, `payee_gateway_taken` where they apply); the webhook entry documents 409 retry and 429. `openapi.json` regenerated.
+- Tests: R6-1 to R6-6 in `test/payee-owner-webhook.test.js`; the F8 pending_rail test builds orders through `buyCredits`.
+
+## 0.2.11 (prepared 2026-11-25; NOT deployed yet)
+
+Payee accounts F8 (health) and F9 (owner console screen). Dark behind `MNP_PAYEE_ACCOUNTS`. Money flag unchanged (OFF). No money behaviour changed.
+
+- F8: `src/payee-health.js` and owner route `GET /v1/owner/payees/{id}/health`. Shows gateway, mode, status, secret names with present true/false (never a value), last gateway event time, ignored event count, orders in `pending_rail` (count and oldest time). Owner only, read-only gate, writes no audit row.
+- F9: `src/owner-page.js`, served at `GET /owner` only when the flag is on (404 otherwise). List, read, add draft, edit name and note, activate, pause, retire, set route, health, recent changes. Signs calls in the browser with the owner secret (never sent or stored). Refuses a secret-looking value before any call. Payee names on screen come from the record.
+- Tests: `test/payee-health-console.test.js`. Contract file regenerated.
+
+## 0.2.10 (prepared 2026-11-25; NOT deployed yet)
+
+Round 5 fixes for payee accounts F5 to F7. Still dark and not deployed. No money behaviour changed.
+
+- Webhook intake: a retryable refusal (amount short, order not yet awaiting payment, unknown order inside a 10 minute grace window) answers 409 and the event id is NOT stored, so the retry is judged again. Permanent refusals (wrong payee, currency mismatch, draft payee with no snapshot or a live order, unknown order after the grace window, ambiguous order) are stored once as `ignored`.
+- Order lookup by gateway order id is filtered by payee in the SQL.
+- Bad signatures: at most one chained audit row per payee per minute (with the count of the minute before); 429 after 20 a minute per payee. Good calls are not counted.
+- Owner calls: old nonces are pruned; 60 calls a minute for the owner key (429 after).
+- The audit-order test checks an explicit newest-first list.
+- Tests: `test/payee-owner-webhook.test.js` (R5-1 to R5-5).
+
+## 0.2.9 (prepared 2026-11-25; NOT deployed yet)
+
+Payee accounts, chunks F5, F6 and F7. Dark behind `MNP_PAYEE_ACCOUNTS` and not deployed. The money flag is unchanged (OFF).
+
+- F5: `requireOwner` in `src/payees.js` is the one role check (used by every payee change and by `setRoute`). New owner-only `listPayeeAudit` (newest first, paged) and `verifyPayeeAudit` (walks the owner chain, says where it breaks).
+- F6: `/v1/owner/...` routes (list, read, create, edit, activate, pause, retire, set route, secret presence, audit, audit verify). Signed with the master secret: `x-owner-ts`, `x-owner-nonce`, `x-owner-sig`. Each nonce works once. No tenant key class can call them. `createApp` takes `env`, `secrets` and `payees`; the Worker passes the flag and a secret reader that never gives out the master secret. Contract gained the owner and webhook entries (levels `owner` and `gateway`).
+- F7: `src/webhooks-in.js` and `POST /v1/webhooks/payee/{id}`. Bad signature 401 (audit row, no body kept). Unknown payee 404 with no detail. Repeat event id: `duplicate`. Applied through `railConfirm` against the order's own payee. Unknown order, other payee, other event type, draft payee with a live order, and amount or currency mismatch are stored as `ignored` (200). Adapters gained `verifyWebhook` (Razorpay HMAC of the raw body, `x-razorpay-signature`, `x-razorpay-event-id`).
+- Tests: `test/payee-owner-webhook.test.js`; `test/ai.test.js` allows the two new permission levels.
+
+## 0.2.8 (prepared 2026-11-25; NOT deployed yet)
+
+Payee accounts, chunks F3 and F4. Dark behind `MNP_PAYEE_ACCOUNTS` and not deployed. The money flag is unchanged.
+
+- F3: `src/routes.js`. `resolvePayee` picks the payee for (tenant, product, currency): product route, else the `*` route, else `no_route` (503). A paused main payee uses the fallback if active; otherwise `payee_unavailable` (503). A payee that does not take the currency gives `currency_unsupported` (422).
+- `buyCredits` takes an optional `product` and, with the flag on, writes product, payee id, route, payee version, mode and a snapshot on the order. They never change later. A repeat of the same order reference returns the first order. A paid order sets the payment record's payee from the order, never from today's route.
+- A fallback use writes an audit row and an owner alert (`payee.fallback_used`). `setRoute` (owner only) refuses overlap (`route_overlap`) and a payee that is not active.
+- F4: `src/gateways/` (registry, Razorpay adapter, fake adapter) and `src/secrets.js`. Create order, verify signature, refund. Secrets are read by NAME from the payee record through an injected reader. HTTP only through an injected `fetch`. Nothing calls the real gateway.
+- Tests: `test/payee-routing.test.js`, including a proof that credits, lots and the ledger chain are the same under two payees.
+
+## 0.2.7 (prepared 2026-11-25; NOT deployed yet)
+
+Round 4 fixes after audit of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- Read-only calls (`getPayee`, `listPayees`, `checkPayeeSecrets`, `secretPresence`) are never blocked by the setup check. Changes and routing calls still are, and the `payee_setup_incomplete` text now names the payee.
+- A stored `secret_names` that cannot be read counts as empty and is reported in the setup error; it no longer raises a raw error.
+- First fill of secret names on a payee with orders: name rules and the clash check still run (a secret name may belong to one payee only, retired included). Only the order lock is skipped, and only when the current names are empty.
+- New error `payee_gateway_taken` (409): a payee cannot be activated or resumed while another is active for the same gateway and mode. Pause or retire the first.
+- Migration 0005: the two back-fill UPDATEs have `WHERE payee_id IS NULL`; the legacy payee insert and route insert have `WHERE NOT EXISTS`.
+- `package-lock.json` removed (no dependencies; CI does not use it).
+- Contract file regenerated.
+
+## 0.2.6 (prepared 2026-11-25; NOT deployed yet)
+
+Round 3 fixes after audit of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- The secret names of a retired payee stay reserved for ever: a new or edited payee cannot use any of them (`payee_exists`), whatever its gateway or mode.
+- While `MNP_PAYEE_ACCOUNTS` is on, every call is refused with `payee_setup_incomplete` (409) if any active payee has empty secret names. The legacy payee ships that way. An owner must fill in the secret names first: an owner edit that sets only `secret_names` on that payee is allowed (and is not blocked by the order lock, since no name is changing).
+- Test proves a payee change and its audit row share one transaction (a failed audit write, or a failed business write, leaves neither).
+- Digit rule: 9 to 18 digits is refused everywhere, except in `address_lines`, `number_prefix` and `receipt_text`, where exactly 6 (PIN) or exactly 10 (phone) digits are allowed. Any other run of 9 or more digits is still refused there, and so is a run of 6 or more digits near the words account, a/c, ifsc, iban.
+- Contract file regenerated (`payee_setup_incomplete`).
+
+## 0.2.5 (prepared 2026-11-25T04:00:00 IST; NOT deployed yet)
+
+Round 2 fixes after two more audits of the payee registry (F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- Bank details are never stored: free text in `invoice`, `checkout`, `note` and `display_name` is refused (`bank_detail_refused`) if it holds a run of 9 or more digits (spaces or dashes allowed, so account and card numbers), an IFSC code, or an IBAN. `invoice.bank_name` must be letters only.
+- `payee_audit.detail` now holds only the names of the fields that changed, never the text.
+- The identity lock now also holds when `verified_payment.payee_id` or `payee_route` (payee or fallback) points at the payee.
+- The long-run text screen applies only to values with no spaces, dots or slashes, so long hostnames and addresses pass. Hex runs and the `rzp_`, `sk_`, `pk_`, `rk_`, `whsec_` prefixes are still refused everywhere.
+- Audit `seq` clash: retried once in a fresh transaction, then `audit_conflict` (409) and the change is rolled back.
+
+## 0.2.4 (prepared 2026-11-25T03:00:00 IST; NOT deployed yet)
+
+Fix round after two audits of 0.2.3 (payee accounts F1 and F2). Still dark and not deployed. No money behaviour changed.
+
+- Audit rows: create, edit, activate, pause, resume and retire each write one `payee_audit` row (who, action, before and after, secret NAMES only) in the same transaction. A failed change leaves none.
+- Owner only: every change needs `ctx.callerType === 'owner'` and a real actor name. Others get `payee_forbidden` (403, added to the contract). Reads stay open.
+- Free text in `checkout`, `invoice`, `note` and `display_name` is screened for pasted secrets (`rzp_` text, long hex, long base64-like runs, `sk_`/`whsec_` style). Refused with `secret_value_refused`; the text is never echoed.
+- `secretPresence`: when `ctx.secrets` is present it replaces `ctx.env`. Now written in the code and tested.
+- Contract file `contract/v1/openapi.json` was out of date; it is regenerated now and a test fails if it drifts.
+- OWNER CHECK before migration 0005 runs on production: (1) the old tables have no test or demo marker, so every old order and payment stays mode `live`; check there is no test-mode order or payment in production. (2) The Razorpay secret names are in the IT Services repo, not here, so the legacy payee keeps no secret names; pause then activate on it fails with `payee_secret_missing` until the owner sets the three names. Both are written in the migration header.
+
+## 0.2.3 (prepared 2026-11-25T02:25:12 IST; NOT deployed yet)
+
+Payee accounts, chunks F1 and F2 of the payee design. Dark: nothing calls the new code and the flag `MNP_PAYEE_ACCOUNTS` is off by default. Live code is still 0.1.0. No money behaviour changed, no flag changed, nothing deployed.
+
+- Migration `0005_payee_accounts.sql`: tables `payee_account`, `payee_route`, `payee_change`, `payee_audit`, `payee_event`, `reconcile_run`; new columns on `purchase_order` and `verified_payment`. Back-fill: every old order and payment points at `pay_legacy_itservices`, and every tenant gets a `*` route to it. The `lot` and `entry` tables are untouched.
+- `src/payees.js`: create, edit, state machine, identity lock, validators, secret-name check. Only secret NAMES are stored; a pasted value is refused and never echoed.
+- `contract/v1/openapi.json`: new error codes (this file was not actually regenerated in 0.2.3; fixed in 0.2.4).
+- Not in this step: routing, order snapshot, adapters, owner key, audit writes for payee changes, health (F3 to F9).
+
 ## 0.2.2 (prepared 2026-11-22T16:25:21 IST; NOT deployed yet)
 
 Second fix round on the go-live plan, after audit 1 of 0.2.1 said FAIL (one Medium, docs only; audit 2 passed). Live code is still 0.1.0. Nothing is turned on, no money flag changed, nothing deployed, no source code changed.

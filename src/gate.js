@@ -9,6 +9,9 @@ import { creditPurchase, payId } from './wallet.js';
 import { displayRate, currentRate } from './fx.js';
 import { audit } from './audit.js';
 import { emit } from './outbox.js';
+import { payeesEnabled } from './payees.js';
+import { orderPayeeColumns, productId } from './routes.js';
+import { railCanServe, isCentralOrder } from './payee-rail.js';
 
 const MAX_ATTEMPTS = 8;
 
@@ -104,6 +107,11 @@ export async function buyCredits(ctx, b) {
     return orderView(prior);
   }
   if (!ctx.rail || ctx.rail.name === 'not_configured') throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');
+  // Payee routing is dark: with the flag off nothing is read or written. With it on, the payee is chosen now and copied onto the order for good.
+  const pc = payeesEnabled(ctx) ? await orderPayeeColumns(ctx, { product: b.product, currency: cur }) : null;
+  // A payee-aware rail (dark, src/payee-rail.js) says whether it can serve THIS order. A plain rail is unchanged, except that it never opens a central payee's order.
+  if (!railCanServe(ctx.rail, pc)) throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');
+  if (!pc && b.product != null) productId(b.product);
   const known = await findAccount(ctx, b.email);
   if (known && known.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
   const acc = await ensureAccount(ctx, b.email, { velocity: true });
@@ -113,6 +121,7 @@ export async function buyCredits(ctx, b) {
     "INSERT INTO purchase_order (id, tenant_id, account_id, order_ref, credits, currency, amount_minor, lock_until, rate_cpu, rate_inr, fixed_price, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending_rail',?,?)",
     id, ctx.tenantId, acc.id, orderRef, credits, cur, amount, now + s.rate_lock_minutes * MIN, s.credits_per_usd, s.inr_paise_per_usd, fixed ? 1 : 0, now, now,
   );
+  if (pc) await ctx.db.run('UPDATE purchase_order SET product = ?, payee_id = ?, route_id = ?, payee_version = ?, mode = ?, payee_snapshot = ? WHERE id = ?', pc.product, pc.payee_id, pc.route_id, pc.payee_version, pc.mode, pc.payee_snapshot, id);
   await ctx.db.run('INSERT INTO rail_outbox (id, tenant_id, order_id, next_at, created_at) VALUES (?,?,?,?,?)', newId('rob'), ctx.tenantId, id, now, now);
   await processRail(ctx, ctx.rail, { orderId: id });
   return orderView(await ctx.db.first('SELECT * FROM purchase_order WHERE id = ?', id));
@@ -137,8 +146,9 @@ export async function processRail(ctx, rail, { orderId = null, limit = 25 } = {}
       continue;
     }
     try {
+      if (isCentralOrder(o) && rail.central !== true) throw Object.assign(new Error('central_rail_off'), { code: 'central_rail_off' }); // a plain rail never opens a central payee's order: it waits, then dead-letters
       // The rail must treat order_id as its idempotency key: a retry must not make a second order.
-      const out = await withTimeout(rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits }), 4000);
+      const out = await withTimeout(rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits }, { ctx, order: o }), 4000);
       if (!out || typeof out.rail_order_id !== 'string') throw new Error('rail gave no order id');
       await ctx.db.run("UPDATE purchase_order SET status = 'awaiting_payment', rail_order_id = ?, pay_url = ?, updated_at = ? WHERE id = ?", out.rail_order_id, typeof out.pay_url === 'string' ? out.pay_url : null, ctx.now(), o.id);
       await ctx.db.run("UPDATE rail_outbox SET status = 'sent', attempts = attempts + 1, last_error = NULL WHERE id = ?", j.id);
@@ -206,6 +216,14 @@ export async function railConfirm(ctx, b) {
   const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 10000000000 });
   if (b.currency !== o.currency) throw new ApiError(422, 'payment_mismatch', 'The payment currency does not match the order.');
   if (paid < o.amount_minor) throw new ApiError(422, 'payment_mismatch', 'The payment is less than the order amount.');
+  // One guarded transition, taken BEFORE any credit is made: of two concurrent confirms for one order (different payment ids) only one changes a row.
+  // The other sees zero changed rows and is treated as already paid, so nothing is credited twice. Runs in the caller's transaction: a later refusal undoes it.
+  const won = await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ? AND status != 'paid'", payRef, paid, ctx.now(), o.id);
+  if (won.changes === 0) {
+    const now = await ctx.db.first('SELECT payment_ref, credits FROM purchase_order WHERE id = ?', o.id);
+    if (now?.payment_ref === payRef) return { order_id: o.id, status: 'paid', credited: now.credits, already: true };
+    throw new ApiError(409, 'order_already_paid', 'This order was already paid with another payment.');
+  }
   const acc = await ctx.db.first('SELECT email_norm FROM account WHERE id = ?', o.account_id);
   // Inside the lock window the order's own rate and credits apply. Later, an INR payment is re-priced at today's rate
   // (the money is in, so it is never refused); it can never buy more credits than the money is worth at that rate.
@@ -214,7 +232,7 @@ export async function railConfirm(ctx, b) {
   const repriced = late && o.currency === 'INR' && s.fx_state !== 'stale' && !o.fixed_price; // a fixed-price pack is never re-priced // with no usable rate the order's own terms apply
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
   const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr }, fixedPrice: !!o.fixed_price }); // the order check above already proved paid >= the fixed price
-  await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);
+  if (o.payee_id) await ctx.db.run('UPDATE verified_payment SET payee_id = ? WHERE tenant_id = ? AND ref = ? AND payee_id IS NULL', o.payee_id, ctx.tenantId, payRef); // the order's own payee, never today's route
   // More money than the order asked for: credits are given for the order only. The extra is flagged so the payment side can refund it.
   const overpaid = !repriced && paid > o.amount_minor ? paid - o.amount_minor : 0;
   if (overpaid) await emit(ctx, 'payment.overpaid', { order_id: o.id, payment_ref: payRef, overpaid_minor: overpaid, currency: o.currency });

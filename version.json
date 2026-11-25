@@ -1,15 +1,113 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.2",
+  "version": "0.2.16",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-22T10:55:21Z",
-  "preparedAtIST": "2026-11-22T16:25:21+05:30",
+  "preparedAt": "2026-11-25T21:45:00Z",
+  "preparedAtIST": "2026-11-26T03:15:00+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.16",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T21:45:00Z",
+      "releasedAt": null,
+      "notes": "On top of 0.2.15 (first written as 0.2.14 on the older 0.2.12 base; the version number moved because the base took 0.2.13 to 0.2.15 meanwhile): The central IT Services pay service as a dark payee gateway (chunks F10 to F13), built against the real contract of the central service (repository itservices-site, commit 7d3d0b0) and tested with a stand-in for it, not the live service. F10: gateway adapter itservices_central (open an order, verify a checkout, liveness; deadline 3500 ms; errors carry no secret, key or address). F11: payee-aware rail; an order whose own snapshot says central is opened at the central service, every other order goes to the old rail unchanged; a plain rail never opens a central payee's order. F12: confirmation credits only from the central service's facts (order, payment, person, amount, currency), once, through railConfirm. F13: owner-only health, booleans only. Dark behind MNP_PAYEE_ACCOUNTS and a second flag MNP_CENTRAL_PAY, both off; not wired into the Worker or the signed routes yet; nothing deployed, no flag changed, money flag stays OFF. docs/OWNER-ASK-CENTRAL-PAY-SERVICE.md lists exactly what the owner and IT Services must supply."
+    },
+    {
+      "version": "0.2.15",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T08:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 9 part A (money path of the payee webhook), dark, nothing deployed, no flag changed, money flag stays OFF. Fix 1: an event for an order that was not known yet is kept as pending_unmatched and answered 409; when the order existed and the same event id was retried, the second write hit the event table's primary key and answered 500, leaving the order unpaid for good. The write is now an upsert that finishes only a pending row (main path and refused path); one credit, rollback on failure and the duplicate answer on a further repeat are unchanged. Fix 2: an order that the sweep timed out (failed, with a gateway order id) was refused by the webhook with 409 order_not_ready, while the confirm route credited the same payment. The webhook now sends it through the same confirm code (amount and currency are checked there), so a late payment is credited once, with an event row and an audit row, and a repeat answers duplicate. Tests: two added (R9-1, R9-2), each fails on the old code. Guards: two added (webhook-pending-upsert, webhook-late-failed-order), 57 in all."
+    },
+    {
+      "version": "0.2.14",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T05:56:47Z",
+      "releasedAt": null,
+      "notes": "Round 8: closes the test gaps and small findings from the round 7 audits of payee accounts, dark, nothing deployed, no flag changed, money flag stays OFF. Tests: the tenant-call nonce cleanup is now checked (a nonce older than the time window but younger than the keep time must survive it), the owner nonce times have no default values in the tests, the webhook contract test checks that recorded carries an order id and duplicate none and checks exact error codes, a reverse check fails when a listed error code is never given by a real call (short explained list), and a check fails on an empty required list anywhere in the contract file. Contract: Payee.secret_names no longer has an empty required list (OpenAPI 3.0.3 does not allow it); file regenerated. Webhook: a payee whose webhook secret is missing was answered 500 with a chained audit row for every well-formed call; it is now counted on the same per-source counter as bad signatures (429 after 20 a minute from one source) and writes at most one audit row per payee per minute; nothing else is written and no money moves. Gateways: the list a payee may name is built from the adapter list, so only razorpay can be stored and no other gateway is named anywhere. Docs: wording corrected. Only the payment-already-applied replay is closed; an ignored outcome can still add one event row and one audit row per fresh event id when a captured signed body is replayed, with no money effect (accepted, open item). Rollback is shown on the local adapter and the Durable Object stand-in, not on real Cloudflare; the first-deploy check stays in STATE.md. Guards: three added (55 in all) and one retargeted."
+    },
+    {
+      "version": "0.2.13",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T04:17:23Z",
+      "releasedAt": null,
+      "notes": "Round 7 fixes for payee accounts, dark, nothing deployed, no flag changed, money flag stays OFF. Rollback is shown by test on the local adapter and the Durable Object stand-in (not on real Cloudflare; the first-deploy check stays in STATE.md): when the credit step throws after the guarded paid update, the order is not left paid and no credit, payment claim, event row or audit row remains (confirm route and webhook), and the retry credits once. A payment id already applied to its order answers duplicate and writes nothing; before, it answered recorded and added an event row and an audit row each time. Only that replay is closed: the event id header is not signed, so a replayed signed body with a fresh event id can still add one event row and one audit row for an ignored outcome (no money effect; accepted, open item). Bad-signature 429 is counted per source and payee instead of per payee, so one flooding source cannot use up the budget of another; a good signature is never counted or refused; the audit row stays one per payee per minute. Owner nonces are kept for the 5 minute window plus 5 minutes of clock margin, counted from the time the call claims. Contract: every payee route now documents its answer, the edit route lists the refusals it really gives, and a new test calls every documented payee route and checks the answer. Guards: one unwatched guard closed (order-paid-once), six added (52 in all at that time); npm run guards now prints progress and takes about 7 minutes on 4 cores. The brief for this round named 0.2.12, but the branch already carried 0.2.12 (round 6), so this is 0.2.13."
+    },
+    {
+      "version": "0.2.12",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T12:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 6 fixes for payee accounts: confirm takes one guarded UPDATE (status != paid) before any credit, so two concurrent payment ids credit once; webhook early 401 for a missing or malformed signature (no HMAC, no write); currency mismatch final, underpay transient; owner and webhook contract errors completed. Dark, nothing deployed, no flag changed."
+    },
+    {
+      "version": "0.2.11",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T10:00:00Z",
+      "releasedAt": null,
+      "notes": "Payee accounts F8 (health) and F9 (owner console screen), dark behind MNP_PAYEE_ACCOUNTS. New owner route GET /v1/owner/payees/{id}/health: gateway and mode, secret names with present true or false (never a value), last gateway event time, count of ignored events, orders in pending_rail. Read-only, writes nothing, works while setup is incomplete. New page GET /owner (404 unless the flag is on): list, read, add, edit, activate, pause, retire, set route, health; thin client of the signed owner routes. No real gateway call, no flag changed, money flag stays OFF, nothing deployed."
+    },
+    {
+      "version": "0.2.10",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T08:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 5 fixes on payee accounts F5-F7, dark. Webhook intake: a retryable refusal (amount short, order not yet awaiting payment, unknown order inside a 10 minute grace window) answers 409 and does NOT store the event id, so the gateway retry is judged again; permanent refusals (wrong payee, currency mismatch, draft payee with no snapshot or a live order, unknown order after the grace window, same payee and gateway order id in two tenants) are stored once as ignored. Order lookup is filtered by payee in the SQL. Bad signatures write at most one chained audit row per payee per minute (with the count of the minute before) and are answered 429 after 20 a minute per payee; good calls are not counted. Owner call nonces are pruned after the 5 minute window and the owner key is limited to 60 calls a minute. The audit order test now checks an explicit newest-first list. No money behaviour changed, nothing deployed, no flag changed."
+    },
+    {
+      "version": "0.2.9",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T06:00:00Z",
+      "releasedAt": null,
+      "notes": "Payee accounts F5 (owner scope), F6 (owner API routes) and F7 (webhook intake per payee), dark behind MNP_PAYEE_ACCOUNTS. One owner-role check (requireOwner) now guards every payee and route change and the new owner-only audit view and chain check. Owner routes under /v1/owner (list, read, create, edit, activate, pause, retire, set route, check secret presence, audit, audit verify) are thin calls to the existing functions, signed with the master secret (time, nonce, method, path, body; each nonce works once); keys of every tenant class are refused. New POST /v1/webhooks/payee/{id}: the signature is checked with that payee's webhook secret on the raw body, an event id is kept once per payee, and the payment is applied by the same code as rail confirm against the order's own payee (never today's route). Unknown order, other payee, other event types and mismatched amounts are stored as ignored (answer 200) and never credit. Paused and retired payees still accept payments; a draft payee accepts only test orders. Contract file regenerated. No real gateway call, no flag changed, money flag stays OFF, nothing deployed."
+    },
+    {
+      "version": "0.2.8",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T04:00:00Z",
+      "releasedAt": null,
+      "notes": "Payee accounts F3 (routing and order snapshot) and F4 (gateway adapters), dark behind MNP_PAYEE_ACCOUNTS. With the flag on, buy_credits takes an optional product, picks the payee from payee_route (product row, else the * row, else no_route 503; paused or wrong-currency main payee uses the fallback if active, else payee_unavailable 503) and copies payee id, route, version, mode and a snapshot onto the order for good. A fallback use leaves an audit row and an owner alert. setRoute (owner only) refuses overlap and non-active payees. Gateway adapter interface with a Razorpay adapter (create order, verify signature, refund; injected fetch and secret reader, nothing calls the real gateway) and a fake adapter. Nothing in credits, lots, holds or the ledger chain reads the payee. Not wired yet: processRail still uses the old rail (F7/F9). No flag changed, nothing deployed."
+    },
+    {
+      "version": "0.2.7",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T02:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 4 audit fixes on payee accounts F1-F2, dark. Read-only calls (get, list, check secrets, secret presence) are never blocked by the setup check, so the owner can see the problem; changes and routing calls still are, and the error names the payee. An unreadable stored secret_names counts as empty and is reported, never a raw error. The first fill of secret names on a payee with orders still runs the name rules and the clash check (a secret name may belong to one payee only, retired included); only the order lock is skipped. Activating or resuming a payee is refused (payee_gateway_taken, 409) while another payee is active for the same gateway and mode. Migration 0005 back-fill statements are guarded so a partial re-run cannot duplicate or rewrite. The unused package-lock.json is removed (no dependencies, CI does not use it). No money behaviour changed, nothing deployed, no flag changed."
+    },
+    {
+      "version": "0.2.6",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T00:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 3 audit fixes on payee accounts F1-F2, dark. The secret names of a retired payee stay reserved for ever (any gateway, mode or role). While the registry flag is on, every call is refused with payee_setup_incomplete (409) if an active payee has no secret names (the legacy payee ships that way); the message says an owner must fill in the secret names first, and an owner edit that sets only the secret names of that payee is the one way out. A test shows the payee change and its audit row commit or roll back together. The bank digit rule is still 9 to 18 digits everywhere, except address_lines, number_prefix and receipt_text, where a run of exactly 6 (PIN) or 10 (phone) is allowed but any other run of 9 or more, or 6 or more digits near the words account, a/c, ifsc or iban, is refused. No money behaviour changed, nothing deployed, no flag changed."
+    },
+    {
+      "version": "0.2.5",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-24T22:30:00Z",
+      "releasedAt": null,
+      "notes": "Round 2 audit fixes on payee accounts F1-F2, dark. Bank details (account-like or card-like digit runs, IFSC, IBAN) are refused in every free-text field (error bank_detail_refused); bank_name must be letters only. payee_audit detail now holds only the names of changed fields, never text values. The identity lock also holds when a verified payment or a route points at the payee. The long-text secret screen no longer refuses long hostnames or addresses (it applies to values without spaces, dots or slashes; hex runs and key prefixes are still refused everywhere). An audit sequence clash is retried once in a fresh transaction, then fails with audit_conflict (409) and the change is rolled back. No money behaviour changed, nothing deployed, no flag changed."
+    },
+    {
+      "version": "0.2.4",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-24T21:30:00Z",
+      "releasedAt": null,
+      "notes": "Audit fix round on payee accounts F1-F2, dark. Every payee change (create, edit, activate, pause, resume, retire) now writes one hash-chained payee_audit row in the same transaction (names of secrets only, never values). Every change needs the owner role (callerType owner, real actor name); otherwise error payee_forbidden (403). Free text in checkout, invoice, note and display text is screened for pasted secret values. ctx.secrets replaces ctx.env in the secret check (documented, tested). Contract file regenerated and a test now fails if it is out of date. Owner checks before running migration 0005 on production: no test or demo marker exists in the old tables, so old orders stay mode live; and the real Razorpay secret names live in the IT Services repo, so the legacy payee still has no secret names. No money behaviour changed, nothing deployed, no flag changed."
+    },
+    {
+      "version": "0.2.3",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-24T20:55:12Z",
+      "releasedAt": null,
+      "notes": "Payee accounts, chunks F1 and F2, dark. New migration 0005 adds the payee tables and the new order columns, and back-fills every existing order, payment and tenant to the payee in use today. New src/payees.js holds the registry (create, edit, draft to active to paused to retired, identity lock after the first order, secret-name checks that never store or return a secret value). It refuses to run unless MNP_PAYEE_ACCOUNTS is 1, which is off by default, and nothing calls it yet. Credits, lots, entries and the ledger chain are unchanged. The contract file gained the new error codes. No money behaviour changed, nothing deployed, no flag changed."
+    },
     {
       "version": "0.2.2",
       "status": "prepared, not deployed",
