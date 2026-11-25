@@ -2,6 +2,14 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.11 (prepared 2026-11-25; NOT deployed yet)
+
+Payee accounts F8 (health) and F9 (owner console screen). Dark behind `MNP_PAYEE_ACCOUNTS`. Money flag unchanged (OFF). No money behaviour changed.
+
+- F8: `src/payee-health.js` and owner route `GET /v1/owner/payees/{id}/health`. Shows gateway, mode, status, secret names with present true/false (never a value), last gateway event time, ignored event count, orders in `pending_rail` (count and oldest time). Owner only, read-only gate, writes no audit row.
+- F9: `src/owner-page.js`, served at `GET /owner` only when the flag is on (404 otherwise). List, read, add draft, edit name and note, activate, pause, retire, set route, health, recent changes. Signs calls in the browser with the owner secret (never sent or stored). Refuses a secret-looking value before any call. Payee names on screen come from the record.
+- Tests: `test/payee-health-console.test.js`. Contract file regenerated.
+
 ## 0.2.10 (prepared 2026-11-25; NOT deployed yet)
 
 Round 5 fixes for payee accounts F5 to F7. Still dark and not deployed. No money behaviour changed.

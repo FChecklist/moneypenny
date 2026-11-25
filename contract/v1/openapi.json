@@ -3405,6 +3405,50 @@
         }
       }
     },
+    "/v1/owner/payees/{id}/health": {
+      "get": {
+        "operationId": "ownerPayeeHealth",
+        "summary": "Health of one payee",
+        "description": "Gateway and mode, secret names with present true or false, last gateway event time, count of ignored events, orders waiting in pending_rail. Never a secret value. Writes nothing.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "payee_forbidden",
+          "payee_not_found",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/owner/routes": {
       "post": {
         "operationId": "ownerSetRoute",

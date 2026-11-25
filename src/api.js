@@ -7,6 +7,8 @@ import { reserve, reserveItem, capture, release, refund, sweepHolds } from './sp
 import { buyCredits, railConfirm, quote, setCatalogue, listCatalogue, listDeadLetters, requeueDeadLetter, processRail, railHealth, fxHealth } from './gate.js';
 import { convertRequest, conversionAction, listConversions } from './convert.js';
 import * as admin from './admin.js';
+import { payeeHealth } from './payee-health.js';
+import { ownerPage } from './owner-page.js';
 import { adminPage } from './admin-page.js';
 import { stubRail } from './rail.js';
 import { currentRate, overrideRateIn } from './fx.js';
@@ -126,6 +128,11 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       if (request.method === 'GET' && url.pathname === '/health') return healthReport();
       if (request.method === 'GET' && url.pathname === '/admin') {
         return new Response(adminPage(), { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'", 'x-frame-options': 'DENY' } });
+      }
+      if (request.method === 'GET' && url.pathname === '/owner') {
+        // the owner screen is only a page; it holds no data. Dark: absent unless the payee flag is on.
+        if (!(payeesOn || env.MNP_PAYEE_ACCOUNTS === '1')) throw new ApiError(404, 'not_found', 'No such route.');
+        return new Response(ownerPage(), { headers: { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'", 'x-frame-options': 'DENY' } });
       }
       if (Number(request.headers.get('content-length')) > MAX_BODY) throw new ApiError(413, 'too_large', 'Request is too large.');
       const raw = await readCapped(request, MAX_BODY);
@@ -332,6 +339,7 @@ ${raw}`))) return fail();
         const fn = { activate: payees.activatePayee, pause: payees.pausePayee, retire: payees.retirePayee }[m[2]];
         return { payee: await fn(c, m[1]) };
       }
+      if ((m = p.match(/^\/v1\/owner\/payees\/([A-Za-z0-9_]+)\/health$/)) && method === 'GET') return { health: await payeeHealth(c, m[1]) };
       if ((m = p.match(/^\/v1\/owner\/payees\/([A-Za-z0-9_]+)\/secrets$/)) && method === 'GET') return payees.checkPayeeSecrets(c, m[1]);
       throw new ApiError(404, 'not_found', 'No such route.');
     });

@@ -1,6 +1,6 @@
 {
   "name": "corporate-moneypenny",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "private": true,
   "type": "module",
   "description": "Corporate Moneypenny (MNP): a closed-loop credit ledger. Phase 0, local only.",
