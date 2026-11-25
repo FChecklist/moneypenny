@@ -7,7 +7,7 @@ import { ApiError, newId, sha256Hex } from './util.js';
 
 export const STATUSES = ['draft', 'active', 'paused', 'retired'];
 export const MOVES = { draft: ['active'], active: ['paused', 'retired'], paused: ['active', 'retired'], retired: [] };
-export const GATEWAYS = ['razorpay', 'stripe', 'cashfree', 'manual_bank']; // F4 replaces this list with the adapter registry
+export const GATEWAYS = ['razorpay', 'stripe', 'cashfree', 'manual_bank', 'itservices_central']; // F4 replaces this list with the adapter registry. itservices_central (F10): the central IT Services pay service.
 export const CURRENCIES = ['INR', 'USD'];
 export const SECRET_KEYS = ['key_id', 'key_secret', 'webhook_secret'];
 const IDENTITY = ['legal_name', 'gateway', 'mode', 'secret_names', 'currencies'];

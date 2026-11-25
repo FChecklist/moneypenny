@@ -11,6 +11,7 @@ import { audit } from './audit.js';
 import { emit } from './outbox.js';
 import { payeesEnabled } from './payees.js';
 import { orderPayeeColumns, productId } from './routes.js';
+import { railCanServe, isCentralOrder } from './payee-rail.js';
 
 const MAX_ATTEMPTS = 8;
 
@@ -108,6 +109,8 @@ export async function buyCredits(ctx, b) {
   if (!ctx.rail || ctx.rail.name === 'not_configured') throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');
   // Payee routing is dark: with the flag off nothing is read or written. With it on, the payee is chosen now and copied onto the order for good.
   const pc = payeesEnabled(ctx) ? await orderPayeeColumns(ctx, { product: b.product, currency: cur }) : null;
+  // A payee-aware rail (dark, src/payee-rail.js) says whether it can serve THIS order. A plain rail is unchanged, except that it never opens a central payee's order.
+  if (!railCanServe(ctx.rail, pc)) throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');
   if (!pc && b.product != null) productId(b.product);
   const known = await findAccount(ctx, b.email);
   if (known && known.status === 'frozen') throw new ApiError(403, 'account_frozen', 'This account is paused.');
@@ -143,8 +146,9 @@ export async function processRail(ctx, rail, { orderId = null, limit = 25 } = {}
       continue;
     }
     try {
+      if (isCentralOrder(o) && rail.central !== true) throw Object.assign(new Error('central_rail_off'), { code: 'central_rail_off' }); // a plain rail never opens a central payee's order: it waits, then dead-letters
       // The rail must treat order_id as its idempotency key: a retry must not make a second order.
-      const out = await withTimeout(rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits }), 4000);
+      const out = await withTimeout(rail.createOrder({ order_id: o.id, order_ref: o.order_ref, amount_minor: o.amount_minor, currency: o.currency, credits: o.credits }, { ctx, order: o }), 4000);
       if (!out || typeof out.rail_order_id !== 'string') throw new Error('rail gave no order id');
       await ctx.db.run("UPDATE purchase_order SET status = 'awaiting_payment', rail_order_id = ?, pay_url = ?, updated_at = ? WHERE id = ?", out.rail_order_id, typeof out.pay_url === 'string' ? out.pay_url : null, ctx.now(), o.id);
       await ctx.db.run("UPDATE rail_outbox SET status = 'sent', attempts = attempts + 1, last_error = NULL WHERE id = ?", j.id);

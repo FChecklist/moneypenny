@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { CENTRAL_GUARDS } from './guards-central.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -70,6 +71,7 @@ export const GUARDS = [
   ['wallet-price', 'the console checks the order price equals the quoted pack price', 'packages/console-wallet/index.js', "if (r.body.fixed_price !== true || r.body.amount_minor !== q.body.inr_minor || r.body.credits !== credits) return fail('price_mismatch', 409);", ''],
   ['wallet-spend-key', 'every spend click needs its own key', 'packages/console-wallet/index.js', "typeof spendKey !== 'string' || !ID.test(spendKey)", 'false'],
   ['wallet-capture-first', 'credits are captured before the game step', 'packages/console-wallet/index.js', "else if (row.status === 'captured') next = await stepGrant(row);", "else if (row.status === 'captured') next = 'stop';"],
+  ...CENTRAL_GUARDS, // F10 to F13, see scripts/guards-central.js
 ];
 
 const testFiles = (dir) => readdirSync(join(dir, 'test')).filter((f) => f.endsWith('.test.js')).map((f) => join('test', f));
