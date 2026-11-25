@@ -5,7 +5,7 @@ import { setup } from './helpers.js';
 import { createApp } from '../src/api.js';
 import * as P from '../src/payees.js';
 import * as R from '../src/routes.js';
-import { buyCredits } from '../src/gate.js';
+import { buyCredits, expireOrders } from '../src/gate.js';
 import { receivePayeeWebhook } from '../src/webhooks-in.js';
 import { stubRail } from '../src/rail.js';
 import { hmacHex } from '../src/util.js';
@@ -675,3 +675,61 @@ test('R8-4: a payee whose webhook secret is missing: a flood of well-formed call
   assert.equal(good.body.result, 'recorded');
   assert.equal((await status(w, o.id)).status, 'paid');
 });
+
+test('R9-1: an event stored as pending (order unknown) is finished when the same event id is retried after the order exists: one credit, then duplicate', async () => {
+  const w = await world();
+  const o = await order(w);
+  const unknown = 'order_late_known';
+  const first = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: unknown, amount: o.amount_minor }), 'pe1');
+  assert.deepEqual([first.status, first.body.result], [409, 'unmatched_retry']);
+  assert.deepEqual((await evs(w)).map((e) => e.outcome), ['pending_unmatched']);
+  await w.s.db.run('UPDATE purchase_order SET rail_order_id = ? WHERE id = ?', unknown, o.id); // the order now exists under that gateway order id
+  const raw = evBody('payment.captured', { order: unknown, amount: o.amount_minor });
+  const second = await hook(w, A, 'LEGACY', raw, 'pe1');
+  assert.deepEqual([second.status, second.body.result], [200, 'recorded']);
+  assert.equal((await status(w, o.id)).status, 'paid');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+  assert.deepEqual((await evs(w)).map((e) => [e.event_id, e.outcome, e.order_id]), [['pe1', 'recorded', o.id]]);
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'pe1')).body.result, 'duplicate');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+  assert.equal((await evs(w)).length, 1);
+  // refused path: pending first, then the order exists but the amount is wrong for good (currency): the pending row becomes ignored, no credit
+  const o2 = await order(w);
+  const u2 = 'order_late_known2';
+  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: u2, pay: 'pay_W2', amount: o2.amount_minor, currency: 'INR' }), 'pe2')).status, 409);
+  await w.s.db.run('UPDATE purchase_order SET rail_order_id = ? WHERE id = ?', u2, o2.id);
+  const ref = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: u2, pay: 'pay_W2', amount: o2.amount_minor, currency: 'INR' }), 'pe2');
+  assert.deepEqual([ref.status, ref.body.result], [200, 'currency_mismatch']);
+  assert.equal((await status(w, o2.id)).status, 'awaiting_payment');
+  assert.deepEqual({ ...(await w.s.db.first("SELECT outcome, order_id FROM payee_event WHERE event_id = 'pe2'")) }, { outcome: 'ignored', order_id: o2.id });
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+});
+
+test('R9-2: a payment that arrives after the sweep timed the order out is credited once by the webhook; a repeat is a duplicate', async () => {
+  const w = await world();
+  const o = await order(w);
+  assert.equal((await status(w, o.id)).status, 'awaiting_payment');
+  w.s.clock.t = o.lock_until + 60000; // lock window passed
+  assert.deepEqual(await expireOrdersFor(w), { expired: 1 });
+  assert.equal((await status(w, o.id)).status, 'failed');
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const r = await hook(w, A, 'LEGACY', raw, 'late1');
+  assert.deepEqual([r.status, r.body.result], [200, 'recorded']);
+  assert.equal((await status(w, o.id)).status, 'paid');
+  const credits = async () => (await w.s.db.first("SELECT COALESCE(SUM(delta),0) n FROM entry WHERE delta > 0")).n;
+  assert.equal(await credits(), 500);
+  assert.deepEqual((await evs(w)).map((e) => [e.event_id, e.outcome, e.order_id]), [['late1', 'recorded', o.id]]);
+  assert.ok((await P.listPayeeAudit(w.owner)).entries.some((e) => e.action === 'webhook.recorded'));
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'late1')).body.result, 'duplicate');
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'late2')).body.result, 'duplicate');
+  assert.equal(await credits(), 500);
+  // a failed order with the wrong currency is refused for good and not credited
+  const o2 = await order(w);
+  w.s.clock.t = o2.lock_until + 60000;
+  await expireOrdersFor(w);
+  const bad = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o2.rail_order_id, pay: 'pay_W5', amount: o2.amount_minor, currency: 'INR' }), 'late3');
+  assert.equal(bad.body.result, 'currency_mismatch');
+  assert.equal((await status(w, o2.id)).status, 'failed');
+  assert.equal(await credits(), 500);
+});
+const expireOrdersFor = (w) => expireOrders({ ...w.owner });

@@ -2,6 +2,14 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.15 (prepared 2026-11-25; NOT deployed yet)
+
+Round 9 part A: two bugs in the money path of the payee webhook (`src/webhooks-in.js`). Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). Part B (docs, test hygiene, contract) is a separate job.
+
+- Early event, then the order exists: an event for an unknown order is stored as `pending_unmatched` and answered 409. When the order existed and the same event id was retried, the plain insert hit the primary key `(payee_id, event_id)` and answered 500; the order stayed `awaiting_payment` with no credits. The write is now an upsert that replaces only a `pending_unmatched` row (normal path, and the refused path). One credit, the rollback on failure and `duplicate` on a further repeat are unchanged. Test R9-1 (409, order appears, same event id gives `recorded` with one credit, repeat gives `duplicate`; the refused path ends as `ignored` with no credit).
+- Late payment after the sweep: an order that `expireOrders` set to `failed` was refused with 409 `order_not_ready` and nothing stored, while the confirm route credited the same payment. A `failed` order with a gateway order id now goes through the same `railConfirm` code (amount and currency are checked there; a currency mismatch is final and ignored, a short amount is 409). The event row and the audit row are written, and a repeat answers `duplicate`. This matches `docs/GO-LIVE.md` and `src/gate.js` ("a late payment is still credited"). Test R9-2 (lock window passes, sweep runs, webhook credits 500 once, repeats are `duplicate`, wrong currency is refused).
+- Tests: 415, up from 413. Guards: two added (`webhook-pending-upsert`, `webhook-late-failed-order`): 57 in all.
+
 ## 0.2.14 (prepared 2026-11-25; NOT deployed yet)
 
 Round 8: closes the test gaps and the small findings from the round 7 audits of payee accounts. Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). No credit is made differently.

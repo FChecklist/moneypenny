@@ -22,6 +22,8 @@ const UNMATCHED_GRACE_MS = 10 * 60000; // an event for an order we do not know m
 const TRANSIENT = new Set(['payment_mismatch', 'order_not_ready', 'unmatched_retry']); // retryable: answered 409, event id NOT stored
 // Intake never calls a gateway. The adapter needs a fetch function to be built, so it gets one that always refuses.
 const noNetwork = async () => { throw new Error('no network in webhook intake'); };
+// One write for every stored event. A row left as 'pending_unmatched' (the order was not known yet) is turned into the final outcome when the same event id comes back; any other existing row is never touched.
+const KEEP_SQL = "INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?) ON CONFLICT(payee_id, event_id) DO UPDATE SET type = excluded.type, order_id = excluded.order_id, outcome = excluded.outcome, received_at = excluded.received_at WHERE payee_event.outcome = 'pending_unmatched'";
 const done = (status, body) => ({ status, body: { ok: status < 400, ...body } });
 /**
  * Which counter a call belongs to: the address the hosting layer reports (the Worker runs behind Cloudflare, which sets cf-connecting-ip itself),
@@ -101,7 +103,7 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     const c = { ...ctx, db };
     const seen = await db.first('SELECT outcome, received_at FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id);
     if (seen && seen.outcome !== 'pending_unmatched') return done(200, { result: 'duplicate' });
-    const keep = (outcome, orderId) => db.run('INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?)', payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, orderId ?? null, outcome, ctx.now());
+    const keep = (outcome, orderId) => db.run(KEEP_SQL, payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, orderId ?? null, outcome, ctx.now());
     const ignore = async (result, orderId = null, tenantId = null) => {
       await keep('ignored', orderId);
       await chainRow(c, db, 'webhook.ignored', () => ({ payee_id: payee.payee_id, reason: result, order_id: orderId }));
@@ -126,8 +128,10 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
       return done(200, { result: 'unmatched' });
     }
     if (payee.status === 'draft' && (own.mode == null || own.mode !== 'test')) return ignore('draft_payee', own.id, own.tenant_id); // no snapshot counts as not live: refused for good
-    if (own.status !== 'paid' && own.status !== 'awaiting_payment') return done(409, { result: 'order_not_ready', retry: true }); // e.g. pending_rail: the event may arrive first
-    if (own.status === 'awaiting_payment' && n.currency !== own.currency) return ignore('currency_mismatch', own.id, own.tenant_id);
+    // A 'failed' order that has a gateway order id was timed out by the sweep; the money is in, so it is credited like /v1/rail/confirm does (railConfirm checks amount and currency).
+    const lateFailed = own.status === 'failed' && !!own.rail_order_id;
+    if (own.status !== 'paid' && own.status !== 'awaiting_payment' && !lateFailed) return done(409, { result: 'order_not_ready', retry: true }); // e.g. pending_rail: the event may arrive first
+    if ((own.status === 'awaiting_payment' || lateFailed) && n.currency !== own.currency) return ignore('currency_mismatch', own.id, own.tenant_id);
     let out;
     try {
       out = await railConfirm({ ...c, tenantId: own.tenant_id }, { order_id: own.id, payment_ref: n.payment_id, paid_minor: n.amount_minor, currency: n.currency });
@@ -151,8 +155,9 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     if (TRANSIENT.has(e.reason)) return done(409, { result: e.reason, retry: true }); // the amount may be fixed or topped up: the event id is not stored
     // amount, currency or "already paid with another payment": nothing was credited. Kept as ignored for the owner to look at.
     return ctx.db.tx(async (db) => {
-      if (await db.first('SELECT 1 x FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id)) return done(200, { result: 'duplicate' });
-      await db.run('INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?)', payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, e.order.id, 'ignored', ctx.now());
+      const had = await db.first('SELECT outcome FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id);
+      if (had && had.outcome !== 'pending_unmatched') return done(200, { result: 'duplicate' });
+      await db.run(KEEP_SQL, payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, e.order.id, 'ignored', ctx.now());
       await chainRow({ ...ctx, db }, db, 'webhook.ignored', () => ({ payee_id: payee.payee_id, reason: e.reason, order_id: e.order.id }));
       return done(200, { result: e.reason });
     });

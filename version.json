@@ -1,6 +1,6 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
   "preparedAt": "2026-11-25T05:56:47Z",
@@ -10,6 +10,13 @@
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.15",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T08:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 9 part A (money path of the payee webhook), dark, nothing deployed, no flag changed, money flag stays OFF. Fix 1: an event for an order that was not known yet is kept as pending_unmatched and answered 409; when the order existed and the same event id was retried, the second write hit the event table's primary key and answered 500, leaving the order unpaid for good. The write is now an upsert that finishes only a pending row (main path and refused path); one credit, rollback on failure and the duplicate answer on a further repeat are unchanged. Fix 2: an order that the sweep timed out (failed, with a gateway order id) was refused by the webhook with 409 order_not_ready, while the confirm route credited the same payment. The webhook now sends it through the same confirm code (amount and currency are checked there), so a late payment is credited once, with an event row and an audit row, and a repeat answers duplicate. Tests: two added (R9-1, R9-2), each fails on the old code. Guards: two added (webhook-pending-upsert, webhook-late-failed-order), 57 in all."
+    },
     {
       "version": "0.2.14",
       "status": "prepared, not deployed",
