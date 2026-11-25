@@ -92,7 +92,7 @@ const wrapped = (name, key) => obj({ ok: yes, [key]: sref(name) }); // { ok: tru
 // Owner calls are signed with the master secret (headers x-owner-ts, x-owner-sig) and work only while MNP_PAYEE_ACCOUNTS is on.
 // The webhook has no key at all: the gateway signature, checked with that payee's webhook secret, is the login.
 // `answer` is the documented 200 answer (the webhook lists `answers` by status instead); `okIsResult` marks the two checks whose ok is the result of the check (a false answer is still HTTP 200).
-const own = (id, method, path, rw, summary, plain, errors = [], extra = {}) => ({ id, method, path, level: 'owner', rw, money: false, ai: 'no', summary, plain, errors: ['payees_disabled', 'payee_forbidden', 'rate_limited', 'bad_json', 'replayed', 'forbidden', ...errors], ...extra });
+const own = (id, method, path, rw, summary, plain, errors = [], extra = {}) => ({ id, method, path, level: 'owner', rw, money: false, ai: 'no', summary, plain, errors: ['payees_disabled', 'payee_forbidden', 'rate_limited', ...(method === 'GET' ? [] : ['bad_json']), 'replayed', 'forbidden', ...errors], ...extra });
 export const OWNER_OPS = [
   own('ownerListPayees', 'GET', '/v1/owner/payees', 'read', 'List payees', 'Every payee with status, gateway, mode and the NAMES of its secrets. Never a secret value.', [], { answer: obj({ ok: yes, payees: list(sref('Payee')) }) }),
   own('ownerGetPayee', 'GET', '/v1/owner/payees/{id}', 'read', 'Read one payee', 'One payee record.', ['payee_not_found', 'not_found'], { answer: wrapped('Payee', 'payee') }),

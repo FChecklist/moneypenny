@@ -8,7 +8,7 @@ import { ADAPTERS } from './gateways/index.js';
 
 export const STATUSES = ['draft', 'active', 'paused', 'retired'];
 export const MOVES = { draft: ['active'], active: ['paused', 'retired'], paused: ['active', 'retired'], retired: [] };
-export const GATEWAYS = Object.keys(ADAPTERS); // only gateways that have an adapter; no other gateway is named anywhere
+export const GATEWAYS = Object.freeze(Object.keys(ADAPTERS)); // only gateways that have an adapter; no other gateway is named anywhere
 export const CURRENCIES = ['INR', 'USD'];
 export const SECRET_KEYS = ['key_id', 'key_secret', 'webhook_secret'];
 const IDENTITY = ['legal_name', 'gateway', 'mode', 'secret_names', 'currencies'];

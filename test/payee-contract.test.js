@@ -214,7 +214,7 @@ for (const { method, path, op } of documented) {
 test('contract: the refusals every owner route can give are listed for it, and the real answers have the documented error shape', async () => {
   const w = await world();
   const owners = documented.filter((d) => d.op['x-permission-level'] === 'owner');
-  for (const { op } of owners) for (const c of ['forbidden', 'replayed', 'payees_disabled', 'rate_limited', 'bad_json', 'payee_forbidden']) assert.ok(op['x-error-codes'].includes(c), `${op.operationId} does not list ${c}`);
+  for (const { op } of owners) for (const c of ['forbidden', 'replayed', 'payees_disabled', 'rate_limited', 'bad_json', 'payee_forbidden']) assert.equal(op['x-error-codes'].includes(c), !(c === 'bad_json' && isGet(op)), `${op.operationId}: ${c} listed wrongly (bad_json belongs to routes with a body only)`);
   const list = contract.paths['/v1/owner/payees'].get;
   const create = contract.paths['/v1/owner/payees'].post;
   const refused = async (op, answer, code) => { const a = await answer; verifyAnswer(op, a); assert.equal(a.body.error.code, code); };
@@ -230,7 +230,6 @@ test('contract: the refusals every owner route can give are listed for it, and t
 const isGet = (op) => Object.entries(contract.paths).some(([, ms]) => ms.get?.operationId === op.operationId);
 const NOT_REACHED = [
   { code: 'payee_forbidden', applies: () => true, why: 'Raised when a caller without the owner role reaches a payee function. Every owner call over HTTP is checked with the master secret and carries the owner role, so no HTTP call can reach it. The function-level test "F5: only the owner role may call any payee mutator or the audit view" covers it.' },
-  { code: 'bad_json', applies: isGet, why: 'A GET has no body to read, so it cannot give bad_json. The contract lists the common owner refusals for every owner route (a round 6 rule, tested in R6-6); every route that has a body does give it here.' },
   { code: 'not_found', applies: (op) => op.operationId === 'ownerGetPayee', why: 'The router gives it for a path it does not know, for example a payee id with a dash. That same answer (404, "No such route.") is how this file detects a route that is missing from the router, so it is not tried as a case.' },
 ];
 const explained = (op, code) => NOT_REACHED.some((n) => n.code === code && n.applies(op));

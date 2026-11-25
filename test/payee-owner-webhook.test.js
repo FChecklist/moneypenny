@@ -428,7 +428,7 @@ test('R6-5: missing or malformed signature is 401 before any HMAC or write; unkn
 
 test('R6-6: owner ops list the refusal codes and the webhook entry documents 409 retry and 429', async () => {
   const { OWNER_OPS, OPS } = await import('../src/contract.js');
-  for (const op of OWNER_OPS.filter((o) => o.level === 'owner')) for (const c of ['rate_limited', 'bad_json', 'replayed', 'forbidden']) assert.ok(op.errors.includes(c), `${op.id} lacks ${c}`);
+  for (const op of OWNER_OPS.filter((o) => o.level === 'owner')) for (const c of ['rate_limited', 'bad_json', 'replayed', 'forbidden']) assert.equal(op.errors.includes(c), !(c === 'bad_json' && op.method === 'GET'), `${op.id}: ${c} listed wrongly (bad_json only where there is a body)`);
   assert.ok(OWNER_OPS.find((o) => o.id === 'ownerPayeeStep').errors.includes('bad_transition'));
   assert.ok(OWNER_OPS.find((o) => o.id === 'ownerPayeeStep').errors.includes('payee_gateway_taken'));
   assert.ok(OWNER_OPS.find((o) => o.id === 'ownerGetPayee').errors.includes('not_found'));

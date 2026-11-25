@@ -139,14 +139,9 @@ test('F2-f: identity is locked after the first order; text still changes and bum
   assert.equal((await P.editPayee(ctx, p.payee_id, { legal_name: 'New Legal', currencies: ['INR', 'USD'] })).version, 3); // still free before any order
   assert.equal(await code(P.editPayee(ctx, p.payee_id, { mode: 'live' })), 'mode_fixed'); // never, even with no order
   await addOrder(s, p.payee_id);
-  // Only gateways with an adapter can be named, and there is one today, so a second gateway name is added to the list for this check only.
-  P.GATEWAYS.push('second_gateway_for_this_test');
-  try {
-    for (const ch of [{ legal_name: 'Other' }, { gateway: 'second_gateway_for_this_test' }, { currencies: ['USD'] }, { secret_names: { ...NAMES, key_id: 'MNP_OTHER_ID' } }]) {
-      assert.equal(await code(P.editPayee(ctx, p.payee_id, ch)), 'identity_locked', JSON.stringify(ch));
-    }
-  } finally {
-    P.GATEWAYS.pop();
+  // The gateway cannot be tried here: only gateways with an adapter can be named and there is one today, so it is not changed. The other identity fields are.
+  for (const ch of [{ legal_name: 'Other' }, { currencies: ['USD'] }, { secret_names: { ...NAMES, key_id: 'MNP_OTHER_ID' } }]) {
+    assert.equal(await code(P.editPayee(ctx, p.payee_id, ch)), 'identity_locked', JSON.stringify(ch));
   }
   const ok = await P.editPayee(ctx, p.payee_id, { invoice: { footer: 'Thanks' }, legal_name: 'New Legal' }); // same value is not a change
   assert.equal(ok.invoice.footer, 'Thanks');
@@ -497,7 +492,7 @@ test('R4-2: a corrupt secret_names row does not brick the registry', async () =>
 test('R4-3: first fill on a payee with orders still runs the name rules and clash; only the lock is skipped', async () => {
   const { s, ctx } = await reg({ env: { ...VALUES, ...BAD_ENV } }, { fillLegacy: false });
   await addOrder(s, 'pay_legacy_itservices');
-  const other = await s.db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_o','Other','Other','stripe','test',?, 'retired','[\"INR\"]',1,'x',1,1)", JSON.stringify(N2));
+  const other = await s.db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_o','Other','Other','no_adapter_gw','test',?, 'retired','[\"INR\"]',1,'x',1,1)", JSON.stringify(N2));
   assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: N2 })), 'payee_exists'); // retired payee's names
   await s.db.run("UPDATE payee_account SET status = 'paused' WHERE payee_id = 'pay_o'");
   assert.equal(await code(P.editPayee(ctx, 'pay_legacy_itservices', { secret_names: N2 })), 'payee_exists'); // live payee's names
@@ -539,7 +534,7 @@ test('R4-6: the guarded back-fill can be re-run on a migrated copy without dupli
   migrate(db, MIGRATIONS);
   // after migration an owner edits things the back-fill must never touch again
   await db.run("UPDATE payee_account SET secret_names = '{\"k\":1}', note = 'edited' WHERE payee_id = 'pay_legacy_itservices'");
-  await db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_n','N','N','stripe','test','{}','draft','[\"INR\"]',1,'x',1,1)");
+  await db.run("INSERT INTO payee_account (payee_id, legal_name, display_name, gateway, mode, secret_names, status, currencies, version, created_by, created_at, updated_at) VALUES ('pay_n','N','N','no_adapter_gw','test','{}','draft','[\"INR\"]',1,'x',1,1)");
   await db.run("UPDATE purchase_order SET payee_id = 'pay_n', mode = 'test', payee_version = 7 WHERE id = 'o1'");
   const sql = readFileSync(new URL('../migrations/0005_payee_accounts.sql', import.meta.url), 'utf8');
   db.exec(sql.slice(sql.indexOf('-- Back-fill')));
@@ -557,6 +552,9 @@ const OTHER_GATEWAYS = ['stri' + 'pe', 'cash' + 'free', 'manual_' + 'bank'];
 test('R8-5: the gateway list is built from the adapters; a payee with a gateway that has no adapter cannot be stored, and the refusal names no gateway', async () => {
   const { s, ctx } = await reg();
   assert.deepEqual(P.GATEWAYS, Object.keys(ADAPTERS)); // built from the adapter registry, not typed in
+  assert.deepEqual(P.GATEWAYS, ['razorpay']);
+  assert.ok(Object.isFrozen(P.GATEWAYS)); // shared list: no test or code can add to it
+  assert.throws(() => P.GATEWAYS.push('x'), TypeError);
   assert.deepEqual(P.GATEWAYS, ['razorpay']);
   const rows = async () => [(await s.db.first('SELECT COUNT(*) n FROM payee_account')).n, (await s.db.first('SELECT COUNT(*) n FROM payee_audit')).n];
   const before = await rows();

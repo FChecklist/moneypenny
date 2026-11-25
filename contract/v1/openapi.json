@@ -3577,7 +3577,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payees_disabled",
@@ -3727,7 +3726,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "not_found",
           "payee_forbidden",
@@ -4003,7 +4001,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payee_not_found",
@@ -4069,7 +4066,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payee_not_found",
@@ -4213,7 +4209,6 @@
         "x-untrusted-fields": [],
         "x-error-codes": [
           "bad_field",
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payees_disabled",
@@ -4305,7 +4300,6 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
-          "bad_json",
           "forbidden",
           "payee_forbidden",
           "payees_disabled",
