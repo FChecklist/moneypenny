@@ -3,7 +3,7 @@
 // A guard that can be removed without any test noticing is a hole: this script then exits with an error.
 // It never changes your working tree: all edits happen in a temporary copy.
 //
-// Usage:  npm run guards            (all guards, about two minutes)
+// Usage:  npm run guards            (all guards: each one runs the whole test suite once, so about 8 seconds each on 4 cores, about 7 minutes in all)
 //         node scripts/guard-check.js money-idem-required   (one guard by id)
 import { cpSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +25,7 @@ export const GUARDS = [
   ['payment-once', 'one payment id is used once (purchase, order cash)', 'src/wallet.js', "if (isUniqueError(e)) throw new ApiError(409, kind === 'order'", "if (false) throw new ApiError(409, kind === 'order'"],
   ['payment-claim', 'a purchase claims its payment id', 'src/wallet.js', "await claimPaymentRef(ctx, payRef, 'purchase');", ''],
   ['order-repeat', 'buy_credits with the same order_ref returns the same order', 'src/gate.js', 'if (prior) {', 'if (false) {'],
-  ['order-paid-once', 'an order paid once cannot be paid again with another payment', 'src/gate.js', "if (o.status === 'paid') {", "if (false) {"],
+  ['order-paid-once', 'a repeat confirm of a paid order is answered before its figures are judged (test R7-5)', 'src/gate.js', "if (o.status === 'paid') {", "if (false) {"],
   ['capture-once', 'a hold is captured once', 'src/spend.js', "if (h.status === 'captured') throw new ApiError(409, 'hold_already_captured', 'This hold was already captured.');\n  if (h.status === 'released')", "if (false) throw new ApiError(409, 'hold_already_captured', 'This hold was already captured.');\n  if (h.status === 'released')"],
   ['reserve-repeat', 'a repeated reserve_item returns the same hold', 'src/spend.js', 'if (open && acc && open.account_id === acc.id && open.product === product', 'if (false && open && acc && open.account_id === acc.id && open.product === product'],
   ['reserve-paid-order', 'a completed order cannot be reserved again (cash reserve)', 'src/spend.js', "return none('account_frozen');\n  const open = await ctx.db.first(\"SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'held'\", ctx.tenantId, orderRef);\n  if (open) throw new ApiError(409, 'order_has_open_hold', 'This order already has a hold. Capture or release it first.');\n  const done = await ctx.db.first(\"SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'captured'\", ctx.tenantId, orderRef);\n  if (done) throw", "return none('account_frozen');\n  const open = await ctx.db.first(\"SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'held'\", ctx.tenantId, orderRef);\n  if (open) throw new ApiError(409, 'order_has_open_hold', 'This order already has a hold. Capture or release it first.');\n  const done = await ctx.db.first(\"SELECT id FROM hold WHERE tenant_id = ? AND order_ref = ? AND status = 'captured'\", ctx.tenantId, orderRef);\n  if (false) throw"],
@@ -34,6 +34,8 @@ export const GUARDS = [
   ['int-only', 'money fields must be whole numbers', 'src/util.js', 'if (!Number.isInteger(v) || v < min || v > max)', 'if (v < min || v > max)'],
   ['int-max', 'money fields have an upper limit', 'src/util.js', 'if (!Number.isInteger(v) || v < min || v > max)', 'if (!Number.isInteger(v) || v < min)'],
   ['pack-ints', 'pack prices are whole numbers', 'src/settings.js', 'Number.isSafeInteger(value[k]) && value[k] >= 100', 'value[k] >= 100'],
+  ['order-paid-transition', 'the paid step is one guarded update taken before any credit, so two payment ids cannot both credit', 'src/gate.js', " AND status != 'paid'\", payRef", "\", payRef"],
+  ['tx-rollback', 'a request that fails is undone as a whole (rollback), so an order is never left paid without its credits', 'src/db.js', "raw.exec('ROLLBACK');", "raw.exec('COMMIT');"],
   // --- amounts must match
   ['pay-underpaid', 'a payment below the order amount is refused', 'src/gate.js', 'if (paid < o.amount_minor) throw', 'if (false) throw'],
   ['pay-currency', 'a payment in another currency is refused', 'src/gate.js', 'if (b.currency !== o.currency) throw', 'if (false) throw'],
@@ -53,6 +55,17 @@ export const GUARDS = [
   ['key-revoked', 'a revoked key stops working', 'src/auth.js', "!row || row.status !== 'active' || row.tstatus !== 'active' ||", '!row ||'],
   ['key-class', 'a key can only use the routes of its own class', 'src/api.js', 'if (!route[2].includes(auth.scope)) throw', 'if (false) throw'],
   ['setup-replay', 'the owner setup call works once', 'src/api.js', "if (!fresh) return json(403,", "if (false) return json(403,"],
+  ['owner-nonce-keep', 'an owner nonce is kept for the time window plus a clock-skew margin', 'src/api.js', 'now() - OWNER_NONCE_KEEP_MS', 'now() - OWNER_WINDOW_MS'],
+  ['webhook-repeat-payment', 'a payment already applied to its order answers duplicate and writes nothing', 'src/webhooks-in.js', "if (out.already) return done(200, { result: 'duplicate' });", ''],
+  ['webhook-pending-upsert', 'an event kept as pending (order not known yet) is finished by a retry of the same event id, not refused with a unique-key error', 'src/webhooks-in.js', " ON CONFLICT(payee_id, event_id) DO UPDATE SET type = excluded.type, order_id = excluded.order_id, outcome = excluded.outcome, received_at = excluded.received_at WHERE payee_event.outcome = 'pending_unmatched'", ''],
+  ['webhook-final-row-kept', 'a stored event that is already final is never rewritten by the one write for events (test R10-1)', 'src/webhooks-in.js', " received_at = excluded.received_at WHERE payee_event.outcome = 'pending_unmatched'", ' received_at = excluded.received_at'],
+  ['webhook-late-failed-order', 'a payment for an order the sweep timed out (failed) is still credited by the webhook', 'src/webhooks-in.js', "const lateFailed = own.status === 'failed';", 'const lateFailed = false;'],
+  ['webhook-source-limit', 'bad signatures are counted per source, so one flood cannot use up another source\'s budget', 'src/webhooks-in.js', 'const mine = `${all}:${sourceBucket(headers)}`;', 'const mine = `${all}:x`;'],
+  ['webhook-bad-limit-answer', 'too many bad signatures from one source get 429', 'src/webhooks-in.js', 'const bad = await countFailure(ctx, payee, headers);\n    if (bad.over) return tooMany();', 'const bad = await countFailure(ctx, payee, headers);\n    if (false) return tooMany();'],
+  ['webhook-missing-secret-limit', 'a payee with its webhook secret missing is counted too: too many calls from one source get 429, not a chained audit row each', 'src/webhooks-in.js', 'const bad = await countFailure(ctx, payee, headers);\n      if (bad.over) return tooMany();', 'const bad = await countFailure(ctx, payee, headers);\n      if (false) return tooMany();'],
+  ['tenant-nonce-cleanup-keep', 'the nonce cleanup of a tenant call is never shorter than the owner nonce keep time', 'src/auth.js', 'ctx.now() - 2 * MAX_SKEW', 'ctx.now() - MAX_SKEW'],
+  ['payee-gateway-frozen', 'the shared gateway list cannot be added to', 'src/payees.js', 'export const GATEWAYS = Object.freeze(Object.keys(ADAPTERS));', 'export const GATEWAYS = Object.keys(ADAPTERS);'],
+  ['payee-gateway-list', 'a payee can only name a gateway that has an adapter', 'src/payees.js', 'export const GATEWAYS = Object.freeze(Object.keys(ADAPTERS));', "export const GATEWAYS = Object.freeze([...Object.keys(ADAPTERS), 'no_adapter']);"],
   // --- rate limits and size
   ['rate-limit', 'a key has a calls-per-minute limit', 'src/auth.js', 'if (r.n > limit) return { limited: true };', ''],
   ['rate-limit-answer', 'a limited call gets 429', 'src/api.js', "if (auth.limited) throw", 'if (false) throw'],
@@ -84,8 +97,10 @@ export function main(only) {
   if (base.status !== 0) { console.error('The untouched copy already fails its tests. Fix that first.'); rmSync(dir, { recursive: true, force: true }); return 2; }
   let survived = 0;
   const rows = [];
-  for (const [id, what, file, find, repl] of GUARDS) {
-    if (only && id !== only) continue;
+  const todo = GUARDS.filter(([id]) => !only || id === only);
+  console.error(`The untouched copy passes. Now ${todo.length} guard${todo.length === 1 ? '' : 's'}, one full test run each. Progress is shown here; the result list comes at the end.`);
+  for (const [k, [id, what, file, find, repl]] of todo.entries()) {
+    console.error(`[${k + 1}/${todo.length}] ${id}`);
     const path = join(dir, file);
     const original = readFileSync(path, 'utf8');
     const n = original.split(find).length - 1;

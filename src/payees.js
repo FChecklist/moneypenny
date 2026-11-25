@@ -4,10 +4,11 @@
 // (env) or ctx.payees === true (tests). The flag defaults off, and nothing else calls this file yet.
 // Secrets: only the NAMES of platform secrets are stored. A value is refused. Responses never carry a value.
 import { ApiError, newId, sha256Hex } from './util.js';
+import { ADAPTERS } from './gateways/index.js';
 
 export const STATUSES = ['draft', 'active', 'paused', 'retired'];
 export const MOVES = { draft: ['active'], active: ['paused', 'retired'], paused: ['active', 'retired'], retired: [] };
-export const GATEWAYS = ['razorpay', 'stripe', 'cashfree', 'manual_bank', 'itservices_central']; // F4 replaces this list with the adapter registry. itservices_central (F10): the central IT Services pay service.
+export const GATEWAYS = Object.freeze(Object.keys(ADAPTERS)); // only gateways that have an adapter; no other gateway is named anywhere // itservices_central (F10) is one of them: src/gateways/index.js registers its adapter
 export const CURRENCIES = ['INR', 'USD'];
 export const SECRET_KEYS = ['key_id', 'key_secret', 'webhook_secret'];
 const IDENTITY = ['legal_name', 'gateway', 'mode', 'secret_names', 'currencies'];

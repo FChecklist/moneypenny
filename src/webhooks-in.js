@@ -6,6 +6,8 @@
 // Events that do not apply (unknown order, other payee, other event type, mismatched amount) are stored as 'ignored' and answered 200,
 // so the gateway stops retrying. They are never applied. A paused or retired payee still accepts payments (money in means credits).
 // A draft payee accepts only test orders. Never a secret value or the raw body in an answer, an audit row or the event table.
+// The same payment id for an order that is already paid with it answers 'duplicate' and writes nothing (the event id header is not signed, so a replayed body can carry a fresh one).
+// Bad signatures, and a payee with its webhook secret missing: 429 is decided per source and payee (see countFailure and sourceBucket); the audit row is per payee per minute. A good signature is never counted and never refused.
 import { ApiError } from './util.js';
 import { gate, chainRow, view } from './payees.js';
 import { gatewayFor } from './gateways/index.js';
@@ -14,12 +16,44 @@ import { railConfirm } from './gate.js';
 import { emit } from './outbox.js';
 
 const MAX_RAW = 65536;
-const BAD_PER_MINUTE = 20;
+const BAD_PER_MINUTE = 20; // bad signatures one source may send for one payee in a minute; after that that source gets 429
+const SOURCE_BUCKETS = 64; // sources are folded into this many counters per payee, so many addresses cannot grow the table, and no address is stored
 const UNMATCHED_GRACE_MS = 10 * 60000; // an event for an order we do not know may just be early; after this it is final
 const TRANSIENT = new Set(['payment_mismatch', 'order_not_ready', 'unmatched_retry']); // retryable: answered 409, event id NOT stored
 // Intake never calls a gateway. The adapter needs a fetch function to be built, so it gets one that always refuses.
 const noNetwork = async () => { throw new Error('no network in webhook intake'); };
+// One write for every stored event. A row left as 'pending_unmatched' (the order was not known yet) is turned into the final outcome when the same event id comes back; any other existing row is never touched.
+export const KEEP_SQL = "INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?) ON CONFLICT(payee_id, event_id) DO UPDATE SET type = excluded.type, order_id = excluded.order_id, outcome = excluded.outcome, received_at = excluded.received_at WHERE payee_event.outcome = 'pending_unmatched'";
 const done = (status, body) => ({ status, body: { ok: status < 400, ...body } });
+/**
+ * Which counter a call belongs to: the address the hosting layer reports (the Worker runs behind Cloudflare, which sets cf-connecting-ip itself),
+ * folded into one of SOURCE_BUCKETS. Without the header every call shares one counter. The address itself is never stored.
+ */
+function sourceBucket(headers) {
+  const from = String(headers?.get?.('cf-connecting-ip') || '').slice(0, 64);
+  if (!from) return 'x';
+  let h = 2166136261; // FNV-1a, 32 bit
+  for (let i = 0; i < from.length; i++) h = Math.imul(h ^ from.charCodeAt(i), 16777619) >>> 0;
+  return String(h % SOURCE_BUCKETS);
+}
+
+/**
+ * Counts one failed call for this payee and source in the current minute, and returns the counts. Used by BOTH failure paths that a caller can
+ * repeat for free: a bad signature, and a payee whose webhook secret is missing from the platform store (every well-formed call fails there).
+ * Two counters per minute: all failed calls for this payee (sizes the chained log: at most one row per payee per minute, with the count of the
+ * minute before), and the failed calls of this source for this payee (decides the 429: one flooding source cannot use up the budget of another).
+ */
+async function countFailure(ctx, payee, headers) {
+  const win = Math.floor(ctx.now() / 60000);
+  const all = `whbad:${payee.payee_id}`;
+  const mine = `${all}:${sourceBucket(headers)}`;
+  for (const key of [all, mine]) await ctx.db.run('INSERT INTO rate_limit (key_id, window, n) VALUES (?,?,1) ON CONFLICT(key_id, window) DO UPDATE SET n = n + 1', key, win);
+  await ctx.db.run("DELETE FROM rate_limit WHERE key_id LIKE 'whbad:%' AND window < ?", win - 5);
+  const total = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', all, win)).n;
+  const fromSource = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', mine, win)).n;
+  return { win, total, fromSource, over: fromSource > BAD_PER_MINUTE, previous: async () => (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', all, win - 1))?.n ?? 0 };
+}
+const tooMany = () => done(429, { error: { code: 'rate_limited', message: 'Too many bad calls. Slow down.' } });
 
 /**
  * ctx: { db, now, env | secrets, fetch? }. `adapters` is for tests. Returns { status, body }. Never throws for a bad signature,
@@ -40,23 +74,26 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     ev = await gatewayFor(payee, { reader, fetch: ctx.fetch ?? noNetwork, adapters: adapters ?? undefined }).verifyWebhook(raw, headers);
   } catch (e) {
     if (e instanceof ApiError && e.code === 'payee_secret_missing') {
-      await chainRow(ctx, ctx.db, 'webhook.secret_missing', () => ({ payee_id: payee.payee_id }));
+      // Every well-formed call fails here, so a caller could repeat it for free. It is counted like a bad signature (same per-source budget, same
+      // one audit row per payee per minute) and nothing else is written: no event row, no order change, no credit.
+      const bad = await countFailure(ctx, payee, headers);
+      if (bad.over) return tooMany();
+      if (bad.total === 1) {
+        const before = await bad.previous();
+        await chainRow(ctx, ctx.db, 'webhook.secret_missing', () => ({ payee_id: payee.payee_id, window: bad.win, count: bad.total, previous_minute_count: before }));
+      }
       throw new ApiError(500, 'payee_secret_missing', 'The webhook secret of this payee is not in the platform store.');
     }
     throw e;
   }
   if (!ev.ok) {
-    // A flood of bad calls must not flood the chained log: one row per payee per minute (it carries the count of the minute before),
-    // and past BAD_PER_MINUTE bad calls in a minute the answer is 429. Good signatures are never counted, so a flood cannot block the gateway.
-    const win = Math.floor(ctx.now() / 60000);
-    const key = `whbad:${payee.payee_id}`;
-    await ctx.db.run('INSERT INTO rate_limit (key_id, window, n) VALUES (?,?,1) ON CONFLICT(key_id, window) DO UPDATE SET n = n + 1', key, win);
-    await ctx.db.run('DELETE FROM rate_limit WHERE key_id = ? AND window < ?', key, win - 5);
-    const cur = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', key, win)).n;
-    if (cur > BAD_PER_MINUTE) return done(429, { error: { code: 'rate_limited', message: 'Too many bad calls. Slow down.' } });
-    if (cur === 1) {
-      const before = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', key, win - 1))?.n ?? 0;
-      await chainRow(ctx, ctx.db, 'webhook.bad_signature', () => ({ payee_id: payee.payee_id, window: win, count: cur, previous_minute_count: before }));
+    // Only here, after the cheap checks (flag, size, signature shape, payee exists) and the real signature check, is anything counted.
+    // A good signature is never counted and never refused, so nobody's bad calls can lock out the real gateway.
+    const bad = await countFailure(ctx, payee, headers);
+    if (bad.over) return tooMany();
+    if (bad.total === 1) {
+      const before = await bad.previous();
+      await chainRow(ctx, ctx.db, 'webhook.bad_signature', () => ({ payee_id: payee.payee_id, window: bad.win, count: bad.total, previous_minute_count: before }));
     }
     return done(401, { error: { code: 'webhook_bad_signature', message: 'Signature not accepted.' } });
   }
@@ -66,7 +103,7 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     const c = { ...ctx, db };
     const seen = await db.first('SELECT outcome, received_at FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id);
     if (seen && seen.outcome !== 'pending_unmatched') return done(200, { result: 'duplicate' });
-    const keep = (outcome, orderId) => db.run('INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?)', payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, orderId ?? null, outcome, ctx.now());
+    const keep = (outcome, orderId) => db.run(KEEP_SQL, payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, orderId ?? null, outcome, ctx.now());
     const ignore = async (result, orderId = null, tenantId = null) => {
       await keep('ignored', orderId);
       await chainRow(c, db, 'webhook.ignored', () => ({ payee_id: payee.payee_id, reason: result, order_id: orderId }));
@@ -91,8 +128,10 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
       return done(200, { result: 'unmatched' });
     }
     if (payee.status === 'draft' && (own.mode == null || own.mode !== 'test')) return ignore('draft_payee', own.id, own.tenant_id); // no snapshot counts as not live: refused for good
-    if (own.status !== 'paid' && own.status !== 'awaiting_payment') return done(409, { result: 'order_not_ready', retry: true }); // e.g. pending_rail: the event may arrive first
-    if (own.status === 'awaiting_payment' && n.currency !== own.currency) return ignore('currency_mismatch', own.id, own.tenant_id);
+    // A 'failed' order was timed out by the sweep; the money is in, so it is credited like /v1/rail/confirm does (railConfirm checks amount and currency). The order was found by its gateway order id above, so it always has one.
+    const lateFailed = own.status === 'failed';
+    if (own.status !== 'paid' && own.status !== 'awaiting_payment' && !lateFailed) return done(409, { result: 'order_not_ready', retry: true }); // e.g. pending_rail: the event may arrive first
+    if ((own.status === 'awaiting_payment' || lateFailed) && n.currency !== own.currency) return ignore('currency_mismatch', own.id, own.tenant_id);
     let out;
     try {
       out = await railConfirm({ ...c, tenantId: own.tenant_id }, { order_id: own.id, payment_ref: n.payment_id, paid_minor: n.amount_minor, currency: n.currency });
@@ -102,6 +141,9 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
       const reason = e.code === 'payment_mismatch' && n.currency !== own.currency ? 'currency_mismatch' : e.code;
       throw new Refused(reason, own); // undo any half-done credit work, then record the event as ignored in a fresh transaction
     }
+    // railConfirm says `already` when this very payment id was applied to this order before (another event for the same payment, or the confirm route got there first).
+    // That is a duplicate: nothing was credited and nothing is written, so a replayed body with a fresh event id cannot grow the event or audit tables.
+    if (out.already) return done(200, { result: 'duplicate' });
     await keep('recorded', own.id);
     await chainRow(c, db, 'webhook.recorded', () => ({ payee_id: payee.payee_id, order_id: own.id }));
     return done(200, { result: 'recorded', order_id: out.order_id });
@@ -113,8 +155,9 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     if (TRANSIENT.has(e.reason)) return done(409, { result: e.reason, retry: true }); // the amount may be fixed or topped up: the event id is not stored
     // amount, currency or "already paid with another payment": nothing was credited. Kept as ignored for the owner to look at.
     return ctx.db.tx(async (db) => {
-      if (await db.first('SELECT 1 x FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id)) return done(200, { result: 'duplicate' });
-      await db.run('INSERT INTO payee_event (payee_id, event_id, type, order_id, outcome, received_at) VALUES (?,?,?,?,?,?)', payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, e.order.id, 'ignored', ctx.now());
+      const had = await db.first('SELECT outcome FROM payee_event WHERE payee_id = ? AND event_id = ?', payee.payee_id, ev.event_id);
+      if (had && had.outcome !== 'pending_unmatched') return done(200, { result: 'duplicate' });
+      await db.run(KEEP_SQL, payee.payee_id, ev.event_id, ev.type ? String(ev.type).slice(0, 60) : null, e.order.id, 'ignored', ctx.now());
       await chainRow({ ...ctx, db }, db, 'webhook.ignored', () => ({ payee_id: payee.payee_id, reason: e.reason, order_id: e.order.id }));
       return done(200, { result: e.reason });
     });

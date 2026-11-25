@@ -26,8 +26,10 @@ async function world() {
 }
 async function two() {
   const { s, ctx } = await world();
-  const b = await P.createPayee(ctx, { legal_name: 'Payee B Legal', gateway: 'stripe', mode: 'live', secret_names: nm('PB'), currencies: ['INR', 'USD'] });
-  await P.activatePayee(ctx, b.payee_id);
+  const b = await P.createPayee(ctx, { legal_name: 'Payee B Legal', gateway: 'razorpay', mode: 'live', secret_names: nm('PB'), currencies: ['INR', 'USD'] });
+  // razorpay is the only gateway with an adapter, and one payee may be active per gateway and mode, so the second active payee for these routing
+  // tests is switched on directly (the one-active-payee rule itself is tested in payees.test.js).
+  await s.db.run("UPDATE payee_account SET status = 'active', version = version + 1 WHERE payee_id = ?", b.payee_id);
   // a tenant made after the migration has no '*' route yet: the owner sets one
   await R.setRoute(ctx, { tenant_id: 'demo', product_id: '*', payee_id: 'pay_legacy_itservices', effective_from: 0, reason: 'default route for tests' });
   return { s, ctx, bId: b.payee_id, A: 'pay_legacy_itservices' };
@@ -132,7 +134,7 @@ test('B.1 proof: credits, balances, lots and the chain are identical under payee
 
 test('F4: registry refuses an unknown gateway; no fetch means no adapter', () => {
   const reader = makeSecretReader(env);
-  assert.throws(() => gatewayFor({ gateway: 'stripe' }, { reader, fetch: async () => {} }), (e) => e.code === 'gateway_unsupported');
+  assert.throws(() => gatewayFor({ gateway: 'nope' }, { reader, fetch: async () => {} }), (e) => e.code === 'gateway_unsupported');
   assert.throws(() => gatewayFor({ gateway: 'razorpay', secret_names: nm('PB') }, { reader }), (e) => e.code === 'gateway_not_configured');
 });
 

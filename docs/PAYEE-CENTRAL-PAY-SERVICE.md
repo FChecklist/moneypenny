@@ -1,6 +1,6 @@
 # Central IT Services pay service as a payee gateway (F10 to F13)
 
-Version 0.2.14, prepared, not deployed. Dark: nothing here runs unless `MNP_PAYEE_ACCOUNTS=1` **and** `MNP_CENTRAL_PAY=1` (both default off) and the Worker is wired as in section 6. The owner-facing list of what must be supplied is `docs/OWNER-ASK-CENTRAL-PAY-SERVICE.md`. The design document `PAYEE-ACCOUNTS-DESIGN.md` was not found; the split below is a reading of the task text, to be confirmed.
+Version 0.2.16, prepared, not deployed. Dark: nothing here runs unless `MNP_PAYEE_ACCOUNTS=1` **and** `MNP_CENTRAL_PAY=1` (both default off) and the Worker is wired as in section 6. The owner-facing list of what must be supplied is `docs/OWNER-ASK-CENTRAL-PAY-SERVICE.md`. The design document `PAYEE-ACCOUNTS-DESIGN.md` was not found; the split below is a reading of the task text, to be confirmed.
 
 This is the "IT Services adapter inside Moneypenny" that `docs/GO-LIVE.md` section 8 lists as not built yet, for the payee-registry path. The older single-rail path (`rail:` in `src/worker.js`) is unchanged.
 
@@ -54,7 +54,7 @@ Fifteen safety rules are listed in `scripts/guards-central.js` and run by `npm r
 - **Refunds and disputes** are recorded by the central service and never pushed. A person refunds in the gateway; the `refund` method of this gateway refuses with `refund_by_central_service`.
 - **Third secret.** The registry requires three different secret names; this gateway needs two. The third must exist with any value (owner question 5).
 - **Push path.** The central service pushes to `/v1/game_pay/payment_confirmed`, which this lineage does not have. `/v1/rail/confirm` takes the same facts (the payer e-mail is ignored there).
-- **Version.** 0.2.14 skips 0.2.13 on purpose: another branch carries fixes for F1 to F9 and expects 0.2.13. Expect small conflicts in `package.json`, `version.json`, `CHANGELOG.md` and `KNOWLEDGE.md` when both merge.
+- **Version.** First written as 0.2.14 on top of 0.2.12. The branch with the F1 to F9 fixes then took 0.2.13 to 0.2.15 (merged as PR 4), so this branch was merged on top of 0.2.15 and now carries 0.2.16. The `GATEWAYS` list is now the keys of the adapter registry (`src/gateways/index.js`), so `itservices_central` is in it because its adapter is registered there.
 
 ## 6. Wiring still to do (developer, not part of this change)
 

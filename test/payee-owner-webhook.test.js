@@ -5,8 +5,8 @@ import { setup } from './helpers.js';
 import { createApp } from '../src/api.js';
 import * as P from '../src/payees.js';
 import * as R from '../src/routes.js';
-import { buyCredits } from '../src/gate.js';
-import { receivePayeeWebhook } from '../src/webhooks-in.js';
+import { buyCredits, expireOrders } from '../src/gate.js';
+import { receivePayeeWebhook, KEEP_SQL } from '../src/webhooks-in.js';
 import { stubRail } from '../src/rail.js';
 import { hmacHex } from '../src/util.js';
 
@@ -27,10 +27,10 @@ async function world() {
 }
 // signed owner call, as the HTTP layer expects it
 let nn = 0;
-async function oc(w, method, path, body, { ts, sign = true } = {}) {
+async function oc(w, method, path, body, { ts, sign = true, nonce: given } = {}) {
   const raw = body === undefined ? '' : JSON.stringify(body);
   const t = ts ?? w.s.now();
-  const nonce = `n${++nn}`;
+  const nonce = given ?? `n${++nn}`;
   const sig = sign ? await hmacHex(w.s.master, `mnp-owner\n${t}\n${nonce}\n${method}\n${path}\n${raw}`) : 'bad';
   const r = await w.app.fetch(new Request(`http://t.local${path}`, { method, body: method === 'GET' ? undefined : raw, headers: { 'x-owner-ts': String(t), 'x-owner-nonce': nonce, 'x-owner-sig': sig } }));
   return { status: r.status, body: await r.json() };
@@ -138,9 +138,9 @@ test('F6: flag off answers payees_disabled; read calls work even while setup is 
 
 // ---------------- F7 ----------------
 const evBody = (type, { order, pay = 'pay_W1', amount, currency = 'USD' }) => JSON.stringify({ event: type, payload: { payment: { entity: { id: pay, order_id: order, amount, currency } } } });
-async function hook(w, payeeId, x, raw, eventId, { sign = true } = {}) {
+async function hook(w, payeeId, x, raw, eventId, { sign = true, source } = {}) {
   const sig = sign ? await hmacHex(WH(x), raw) : '0'.repeat(64); // wrong but well formed
-  const r = await w.app.fetch(new Request(`http://t.local/v1/webhooks/payee/${payeeId}`, { method: 'POST', body: raw, headers: { 'x-razorpay-signature': sig, 'x-razorpay-event-id': eventId } }));
+  const r = await w.app.fetch(new Request(`http://t.local/v1/webhooks/payee/${payeeId}`, { method: 'POST', body: raw, headers: { 'x-razorpay-signature': sig, 'x-razorpay-event-id': eventId, ...(source ? { 'cf-connecting-ip': source } : {}) } }));
   return { status: r.status, body: await r.json() };
 }
 async function order(w, o = {}) {
@@ -179,10 +179,10 @@ test('F7: a good event is recorded once; a repeat is a duplicate; a second event
   assert.equal((await status(w, o.id)).payee_id, A); // the order's own payee, from its snapshot
   assert.equal((await hook(w, A, 'LEGACY', raw, 'ev1')).body.result, 'duplicate');
   const paidAgain = await hook(w, A, 'LEGACY', evBody('order.paid', { order: o.rail_order_id, amount: o.amount_minor }), 'ev2');
-  assert.equal(paidAgain.body.result, 'recorded');
+  assert.equal(paidAgain.body.result, 'duplicate'); // round 7: the same payment again is a duplicate, not a second recording
   assert.equal((await w.s.db.first("SELECT COUNT(*) n FROM purchase_order WHERE status = 'paid'")).n, 1);
   assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1); // one credit, not two
-  assert.equal((await w.s.db.all('SELECT * FROM payee_event')).length, 2);
+  assert.equal((await w.s.db.all('SELECT * FROM payee_event')).length, 1); // and nothing new is stored
 });
 
 test('F7: the order snapshot decides: a late payment to the old payee after a switch is credited; the new payee cannot confirm it', async () => {
@@ -342,9 +342,11 @@ test('R5-4: 100 bad signatures write one audit row per minute and are rate limit
   assert.equal(JSON.parse(all[1].detail).previous_minute_count, 100);
 });
 
-test('R5-5: owner nonces older than the window are pruned and the owner key is rate limited per minute', async () => {
+test('R5-5: owner nonces older than the keep time are pruned and the owner key is rate limited per minute', async () => {
   const w = await world();
-  await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'ancient', ?)", w.s.now() - 6 * 60000);
+  const { OWNER_NONCE_KEEP_MS } = await import('../src/api.js'); // no default: a missing export must fail here, not pass on a made-up value
+  assert.ok(Number.isFinite(OWNER_NONCE_KEEP_MS) && OWNER_NONCE_KEEP_MS > 0, 'OWNER_NONCE_KEEP_MS is not exported by src/api.js');
+  await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'ancient', ?)", w.s.now() - OWNER_NONCE_KEEP_MS - 1000);
   await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'recent', ?)", w.s.now() - 60000);
   assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
   const left = (await w.s.db.all("SELECT nonce FROM nonce WHERE key_id = 'owner'")).map((r) => r.nonce);
@@ -426,7 +428,7 @@ test('R6-5: missing or malformed signature is 401 before any HMAC or write; unkn
 
 test('R6-6: owner ops list the refusal codes and the webhook entry documents 409 retry and 429', async () => {
   const { OWNER_OPS, OPS } = await import('../src/contract.js');
-  for (const op of OWNER_OPS.filter((o) => o.level === 'owner')) for (const c of ['rate_limited', 'bad_json', 'replayed', 'forbidden']) assert.ok(op.errors.includes(c), `${op.id} lacks ${c}`);
+  for (const op of OWNER_OPS.filter((o) => o.level === 'owner')) for (const c of ['rate_limited', 'bad_json', 'replayed', 'forbidden']) assert.equal(op.errors.includes(c), !(c === 'bad_json' && op.method === 'GET'), `${op.id}: ${c} listed wrongly (bad_json only where there is a body)`);
   assert.ok(OWNER_OPS.find((o) => o.id === 'ownerPayeeStep').errors.includes('bad_transition'));
   assert.ok(OWNER_OPS.find((o) => o.id === 'ownerPayeeStep').errors.includes('payee_gateway_taken'));
   assert.ok(OWNER_OPS.find((o) => o.id === 'ownerGetPayee').errors.includes('not_found'));
@@ -450,3 +452,301 @@ test('R6-2: a refused owner call has used its nonce; the same signed call again 
   assert.equal(again.status, 403);
   assert.equal((await again.json()).error.code, 'replayed');
 });
+
+// ---------------- round 7 ----------------
+// A database fault that fires only AFTER the guarded paid update: the trigger needs the order to be 'paid' already, so a fault that
+// fires proves the order of work (paid update first, credit second) and that the throw came from the credit step.
+const arm = (w, orderId) => w.s.db.exec(`CREATE TRIGGER fault_after_paid BEFORE INSERT ON lot WHEN (SELECT status FROM purchase_order WHERE id = '${orderId}') = 'paid' BEGIN SELECT RAISE(ABORT, 'injected fault after the paid update'); END`);
+const disarm = (w) => w.s.db.exec('DROP TRIGGER IF EXISTS fault_after_paid');
+const quiet = async (fn) => { const keep = console.error; console.error = () => {}; try { return await fn(); } finally { console.error = keep; } };
+const COUNTED = ['lot', 'entry', 'payment_ref', 'verified_payment', 'idempotency', 'outbox', 'audit_log', 'payee_event', 'payee_audit'];
+const counts = async (w) => JSON.stringify(await Promise.all(COUNTED.map(async (t) => (await w.s.db.first(`SELECT COUNT(*) n FROM ${t}`)).n)));
+
+test('R7-1: when creditPurchase throws AFTER the guarded paid update, the order is not left paid and no credit exists (confirm route and webhook)', async () => {
+  const w = await world();
+  const { s } = w;
+  const mk = async (ref) => (await s.api.post('/v1/buy_credits', { email: 'rb@example.com', credits: 500, currency: 'USD', order_ref: ref })).body;
+  const row = async (id) => ({ ...(await s.db.first('SELECT status, payment_ref, paid_minor FROM purchase_order WHERE id = ?', id)) });
+  const lots = async (ref) => (await s.db.first('SELECT COUNT(*) n FROM lot WHERE source_ref = ?', ref)).n;
+  const confirm = (o, ref) => s.pay.post('/v1/rail/confirm', { order_id: o.order_id, payment_ref: ref, paid_minor: o.amount_minor, currency: 'USD' }, { idem: `key-${ref}` });
+  const { railConfirm } = await import('../src/gate.js');
+
+  // A. The control. The same fault WITHOUT the route's transaction leaves the order paid and no credit: the state the route must never leave behind.
+  const c = await mk('rb-control');
+  arm(w, c.order_id);
+  const hurt = await railConfirm({ ...s.ctx(), callerType: 'payment' }, { order_id: c.order_id, payment_ref: 'pay_rb_control', paid_minor: c.amount_minor, currency: 'USD' }).catch((e) => e);
+  assert.match(String(hurt.message), /injected fault/);
+  assert.equal((await row(c.order_id)).status, 'paid');
+  assert.equal(await lots('pay_rb_control'), 0);
+  disarm(w);
+
+  // B. The confirm route: the throw comes after the paid update, and the route's transaction undoes everything.
+  const o = await mk('rb-route');
+  arm(w, o.order_id);
+  const before = await counts(w);
+  const r = await quiet(() => confirm(o, 'pay_rb_route'));
+  assert.deepEqual([r.status, r.body.error.code], [500, 'internal']);
+  assert.deepEqual(await row(o.order_id), { status: 'awaiting_payment', payment_ref: null, paid_minor: null });
+  assert.equal(await lots('pay_rb_route'), 0);
+  assert.equal(await counts(w), before); // no credit, no payment claim, no event, no idempotency record: nothing at all
+  assert.equal((await s.api.get('/v1/balance?email=rb%40example.com')).body.balance, 0);
+  disarm(w);
+  const ok = await confirm(o, 'pay_rb_route'); // same key again: the failed call left no trace, so the retry is judged fresh
+  assert.deepEqual([ok.status, ok.body.credited], [200, 500]);
+  assert.equal((await row(o.order_id)).status, 'paid');
+  assert.equal(await lots('pay_rb_route'), 1);
+
+  // C. The webhook: same fault, same proof. The gateway gets a 500 and will retry; the retry credits once.
+  const h = await order(w);
+  arm(w, h.id);
+  const raw = evBody('payment.captured', { order: h.rail_order_id, pay: 'pay_rb_hook', amount: h.amount_minor });
+  const before2 = await counts(w);
+  const hit = await quiet(() => hook(w, A, 'LEGACY', raw, 'rb-ev'));
+  assert.deepEqual([hit.status, hit.body.error.code], [500, 'internal']);
+  assert.equal((await status(w, h.id)).status, 'awaiting_payment');
+  assert.equal(await counts(w), before2); // no event row and no audit row either
+  disarm(w);
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'rb-ev')).body.result, 'recorded');
+  assert.equal((await status(w, h.id)).status, 'paid');
+  assert.equal(await lots('pay_rb_hook'), 1);
+});
+
+test('R7-2: the same payment id again for a paid order answers duplicate and writes nothing (new event id, other event type, paid first by the confirm route)', async () => {
+  const w = await world();
+  const o = await order(w);
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const one = await hook(w, A, 'LEGACY', raw, 'ev1');
+  assert.deepEqual([one.status, one.body.result], [200, 'recorded']);
+  const state = async () => JSON.stringify([await w.s.db.all('SELECT * FROM payee_event ORDER BY event_id'), await w.s.db.all('SELECT seq, action FROM payee_audit ORDER BY seq'), (await w.s.db.first('SELECT COUNT(*) n FROM lot')).n, (await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, await w.s.db.first('SELECT status, payment_ref, paid_minor FROM purchase_order WHERE id = ?', o.id)]);
+  const first = await state();
+  // the gateway's own second event for the same payment, then the same signed body again with fresh event ids (the event id header is not signed)
+  const second = await hook(w, A, 'LEGACY', evBody('order.paid', { order: o.rail_order_id, amount: o.amount_minor }), 'ev2');
+  assert.deepEqual([second.status, second.body], [200, { ok: true, result: 'duplicate' }]);
+  for (let i = 0; i < 5; i++) assert.deepEqual((await hook(w, A, 'LEGACY', raw, `replay${i}`)).body, { ok: true, result: 'duplicate' });
+  assert.equal(await state(), first); // not one new row anywhere
+  assert.deepEqual((await hook(w, A, 'LEGACY', raw, 'ev1')).body, { ok: true, result: 'duplicate' }); // the very same event id gives the very same answer
+  // paid first by the confirm route with this payment id, then the gateway tells us about it
+  const o2 = await order(w);
+  const via = await w.s.pay.post('/v1/rail/confirm', { order_id: o2.id, payment_ref: 'pay_W2', paid_minor: o2.amount_minor, currency: 'USD' });
+  assert.equal(via.status, 200);
+  const before = await state();
+  const late = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o2.rail_order_id, pay: 'pay_W2', amount: o2.amount_minor }), 'ev3');
+  assert.deepEqual([late.status, late.body.result], [200, 'duplicate']);
+  assert.equal(await state(), before);
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 2); // one credit per order, never more
+});
+
+test('R7-3: the bad-signature limit is per source and payee: one source cannot use up the budget of another, a good signature is never counted, tables stay small', async () => {
+  const w = await world();
+  const o = await order(w);
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const flood = [];
+  for (let i = 0; i < 25; i++) flood.push((await hook(w, A, 'LEGACY', raw, `fa${i}`, { sign: false, source: '203.0.113.9' })).status);
+  assert.deepEqual([flood.filter((x) => x === 401).length, flood.filter((x) => x === 429).length], [20, 5]);
+  // another source has its own budget (before round 7 every source shared one budget per payee and got 429 here)
+  const other = await hook(w, A, 'LEGACY', raw, 'fb0', { sign: false, source: '198.51.100.7' });
+  assert.deepEqual([other.status, other.body.error.code], [401, 'webhook_bad_signature']);
+  // a good signature is never refused or counted, from the flooding source or from any other
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'good', { source: '203.0.113.9' })).body.result, 'recorded');
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'good2', { source: '198.51.100.7' })).body.result, 'duplicate');
+  // 300 more bad calls, each from a different source: still one audit row for the minute, and the counters stay few
+  for (let i = 0; i < 300; i++) await hook(w, A, 'LEGACY', raw, `fm${i}`, { sign: false, source: `10.0.${Math.floor(i / 250)}.${i % 250}` });
+  const rows = () => w.s.db.all("SELECT detail FROM payee_audit WHERE action = 'webhook.bad_signature'");
+  assert.equal((await rows()).length, 1);
+  assert.ok((await w.s.db.first("SELECT COUNT(*) n FROM rate_limit WHERE key_id LIKE 'whbad:%'")).n <= 70);
+  // the audit row still carries the number of bad calls of the minute before, across all sources
+  w.s.clock.t += 60000;
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'next', { sign: false, source: '203.0.113.9' })).status, 401);
+  const all = await rows();
+  assert.equal(all.length, 2);
+  assert.equal(JSON.parse(all[1].detail).previous_minute_count, 25 + 1 + 300);
+  // cheap checks come first and write nothing: a malformed signature header and an unknown payee never touch the counters
+  const n0 = (await w.s.db.first("SELECT COUNT(*) n FROM rate_limit WHERE key_id LIKE 'whbad:%'")).n;
+  const malformed = await w.app.fetch(new Request(`http://t.local/v1/webhooks/payee/${A}`, { method: 'POST', body: raw, headers: { 'x-razorpay-signature': 'zz', 'x-razorpay-event-id': 'm', 'cf-connecting-ip': '192.0.2.77' } }));
+  assert.equal(malformed.status, 401);
+  assert.equal((await hook(w, 'pay_unknown', 'LEGACY', raw, 'u', { sign: false, source: '192.0.2.78' })).status, 404);
+  assert.equal((await w.s.db.first("SELECT COUNT(*) n FROM rate_limit WHERE key_id LIKE 'whbad:%'")).n, n0);
+});
+
+test('R7-4: an owner nonce outlives the accepted time window plus a clock-skew margin (oldest accepted time, newest accepted time, and the keep boundary)', async () => {
+  const w = await world();
+  const { OWNER_WINDOW_MS, OWNER_NONCE_KEEP_MS } = await import('../src/api.js'); // no defaults: a missing export must fail here
+  assert.ok(Number.isFinite(OWNER_WINDOW_MS) && Number.isFinite(OWNER_NONCE_KEEP_MS), 'OWNER_WINDOW_MS and OWNER_NONCE_KEEP_MS must both be exported by src/api.js');
+  assert.ok(OWNER_NONCE_KEEP_MS >= OWNER_WINDOW_MS + 60000, 'a nonce must be kept for the window plus at least a minute of clock skew');
+  const t0 = w.s.now();
+  const call = (ts, nonce) => oc(w, 'GET', '/v1/owner/payees', undefined, { ts, nonce });
+  const replayed = (r) => [r.status, r.body.error?.code ?? null];
+  // (a) a request 59 seconds short of the oldest accepted age is taken; its window ends one second after t0
+  const tsA = t0 - OWNER_WINDOW_MS + 1000;
+  assert.equal((await call(tsA, 'old-edge')).status, 200);
+  w.s.clock.t = t0 + 1500; // its window has ended; another owner call runs and cleans up
+  assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
+  w.s.clock.t = t0 + 500; // the clock is read half a second behind the cleaner (another machine, or a step back): inside the window again
+  assert.deepEqual(replayed(await call(tsA, 'old-edge')), [403, 'replayed']);
+  // (b) a request dated 59 seconds short of the newest accepted time (ahead of the clock)
+  w.s.clock.t = t0;
+  const tsB = t0 + OWNER_WINDOW_MS - 1000;
+  assert.equal((await call(tsB, 'new-edge')).status, 200);
+  w.s.clock.t = t0 + 2 * OWNER_WINDOW_MS; // its window (ending at tsB + window) has ended; cleanup runs
+  assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
+  w.s.clock.t = t0 + 2 * OWNER_WINDOW_MS - 1500; // stepped back: inside the window again
+  assert.deepEqual(replayed(await call(tsB, 'new-edge')), [403, 'replayed']);
+  // (c) the keep boundary itself: kept exactly KEEP after its time, gone one millisecond later
+  w.s.clock.t = t0 + 3 * OWNER_NONCE_KEEP_MS;
+  const now = w.s.now();
+  await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'kept', ?), ('owner', 'gone', ?)", now - OWNER_NONCE_KEEP_MS, now - OWNER_NONCE_KEEP_MS - 1);
+  assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
+  const left = (await w.s.db.all("SELECT nonce FROM nonce WHERE key_id = 'owner'")).map((x) => x.nonce);
+  assert.ok(left.includes('kept') && !left.includes('gone') && !left.includes('old-edge') && !left.includes('new-edge'));
+  // (d) the other cleaner: every signed call by a tenant key also deletes old nonces of all key ids. It must never delete one the owner path still keeps.
+  // 'inside-keep' is older than the time window but younger than the keep time: the owner path keeps it, so a tenant cleanup that is only as long as
+  // the window (or any length under the keep time) would delete it, and this test would fail.
+  const t1 = w.s.now();
+  await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'inside-keep', ?)", t1 - OWNER_WINDOW_MS - 1000);
+  assert.equal((await w.s.read.get('/v1/balance?email=nobody%40example.com')).status, 200);
+  const after = (await w.s.db.all("SELECT nonce FROM nonce WHERE key_id = 'owner'")).map((x) => x.nonce);
+  assert.ok(after.includes('kept'), 'a tenant call deleted an owner nonce that is exactly at the keep boundary');
+  assert.ok(after.includes('inside-keep'), 'a tenant call deleted an owner nonce that is older than the window but younger than the keep time');
+});
+
+test('R7-5: a paid order answers a repeat confirm before its figures are judged: the same payment id gets the first answer, another payment id gets order_already_paid', async () => {
+  const w = await world();
+  const { s } = w;
+  const o = (await s.api.post('/v1/buy_credits', { email: 'rp@example.com', credits: 500, currency: 'USD', order_ref: 'rp-1' })).body;
+  const send = (ref, extra) => s.pay.post('/v1/rail/confirm', { order_id: o.order_id, payment_ref: ref, ...extra });
+  const first = await send('pay_rp1', { paid_minor: o.amount_minor, currency: 'USD' });
+  assert.deepEqual([first.status, first.body.credited], [200, 500]);
+  // the repeat carries figures an open order would refuse (wrong currency, then nothing at all); a paid order does not judge them
+  for (const extra of [{ paid_minor: 1, currency: 'INR' }, {}]) {
+    const again = await send('pay_rp1', extra);
+    assert.deepEqual([again.status, again.body.already, again.body.credited], [200, true, 500]);
+    const other = await send('pay_rp2', extra);
+    assert.deepEqual([other.status, other.body.error.code], [409, 'order_already_paid']);
+  }
+  assert.equal((await s.db.first("SELECT COUNT(*) n FROM lot WHERE source_ref = 'pay_rp1'")).n, 1);
+  assert.equal((await s.db.first("SELECT COUNT(*) n FROM lot WHERE source_ref = 'pay_rp2'")).n, 0);
+});
+
+// ---------------- round 8 ----------------
+test('R8-4: a payee whose webhook secret is missing: a flood of well-formed calls is counted per source, audit rows stay bounded, money state does not change', async () => {
+  const w = await world();
+  const o = await order(w);
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const sig = await hmacHex(WH('LEGACY'), raw); // well formed, and a correct signature: it fails only because the payee's secret has no value in the store
+  const gone = createApp({ db: w.s.db, master: w.s.master, now: w.s.now, env: { MNP_PAYEE_ACCOUNTS: '1' }, aiWithoutStatus: true });
+  const call = async (eventId, source) => {
+    const r = await gone.fetch(new Request(`http://t.local/v1/webhooks/payee/${A}`, { method: 'POST', body: raw, headers: { 'x-razorpay-signature': sig, 'x-razorpay-event-id': eventId, ...(source ? { 'cf-connecting-ip': source } : {}) } }));
+    return { status: r.status, body: await r.json() };
+  };
+  const money = async () => ({
+    orders: await w.s.db.all('SELECT id, status FROM purchase_order ORDER BY id'),
+    entries: (await w.s.db.first('SELECT COUNT(*) n FROM entry')).n,
+    lots: (await w.s.db.first('SELECT COUNT(*) n FROM lot')).n,
+    claims: (await w.s.db.first('SELECT COUNT(*) n FROM payment_ref')).n,
+    events: (await w.s.db.first('SELECT COUNT(*) n FROM payee_event')).n,
+  });
+  const rows = () => w.s.db.all("SELECT detail FROM payee_audit WHERE action = 'webhook.secret_missing'");
+  const before = await money();
+  assert.equal(before.orders.find((x) => x.id === o.id).status, 'awaiting_payment');
+  // one source: 20 calls get the 500, the rest of its minute gets 429 (before this round every call got a 500 and a chained audit row)
+  const one = [];
+  for (let i = 0; i < 25; i++) one.push(await call(`ma${i}`, '203.0.113.9'));
+  assert.deepEqual([one.filter((x) => x.status === 500).length, one.filter((x) => x.status === 429).length], [20, 5]);
+  assert.ok(one.filter((x) => x.status === 500).every((x) => x.body.error.code === 'payee_secret_missing'));
+  assert.ok(one.filter((x) => x.status === 429).every((x) => x.body.error.code === 'rate_limited'));
+  // another source has its own budget
+  assert.equal((await call('mb0', '198.51.100.7')).status, 500);
+  // 300 more calls, each from a different source, in the same minute: still one audit row, and the counters stay few
+  for (let i = 0; i < 300; i++) await call(`mc${i}`, `10.0.${Math.floor(i / 250)}.${i % 250}`);
+  assert.equal((await rows()).length, 1);
+  assert.ok((await w.s.db.first("SELECT COUNT(*) n FROM rate_limit WHERE key_id LIKE 'whbad:%'")).n <= 70);
+  assert.equal((await w.s.db.first("SELECT COUNT(*) n FROM payee_audit WHERE action IN ('webhook.secret_missing', 'webhook.bad_signature')")).n, 1);
+  // no money state moved, and no event row was stored for any of the 326 calls
+  assert.deepEqual(await money(), before);
+  // next minute: one more row, with the count of the minute before; still no money state
+  w.s.clock.t += 60000;
+  assert.equal((await call('md0', '203.0.113.9')).status, 500);
+  const all = await rows();
+  assert.equal(all.length, 2);
+  assert.equal(JSON.parse(all[1].detail).previous_minute_count, 25 + 1 + 300);
+  assert.deepEqual(await money(), before);
+  // the flood left nothing behind that blocks the real payment: with the secret in the store again, the same event is applied once
+  const good = await hook(w, A, 'LEGACY', raw, 'ma0');
+  assert.equal(good.body.result, 'recorded');
+  assert.equal((await status(w, o.id)).status, 'paid');
+});
+
+test('R9-1: an event stored as pending (order unknown) is finished when the same event id is retried after the order exists: one credit, then duplicate', async () => {
+  const w = await world();
+  const o = await order(w);
+  const unknown = 'order_late_known';
+  const first = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: unknown, amount: o.amount_minor }), 'pe1');
+  assert.deepEqual([first.status, first.body.result], [409, 'unmatched_retry']);
+  assert.deepEqual((await evs(w)).map((e) => e.outcome), ['pending_unmatched']);
+  await w.s.db.run('UPDATE purchase_order SET rail_order_id = ? WHERE id = ?', unknown, o.id); // the order now exists under that gateway order id
+  const raw = evBody('payment.captured', { order: unknown, amount: o.amount_minor });
+  const second = await hook(w, A, 'LEGACY', raw, 'pe1');
+  assert.deepEqual([second.status, second.body.result], [200, 'recorded']);
+  assert.equal((await status(w, o.id)).status, 'paid');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+  assert.deepEqual((await evs(w)).map((e) => [e.event_id, e.outcome, e.order_id]), [['pe1', 'recorded', o.id]]);
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'pe1')).body.result, 'duplicate');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+  assert.equal((await evs(w)).length, 1);
+  // refused path: pending first, then the order exists but the amount is wrong for good (currency): the pending row becomes ignored, no credit
+  const o2 = await order(w);
+  const u2 = 'order_late_known2';
+  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: u2, pay: 'pay_W2', amount: o2.amount_minor, currency: 'INR' }), 'pe2')).status, 409);
+  await w.s.db.run('UPDATE purchase_order SET rail_order_id = ? WHERE id = ?', u2, o2.id);
+  const ref = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: u2, pay: 'pay_W2', amount: o2.amount_minor, currency: 'INR' }), 'pe2');
+  assert.deepEqual([ref.status, ref.body.result], [200, 'currency_mismatch']);
+  assert.equal((await status(w, o2.id)).status, 'awaiting_payment');
+  assert.deepEqual({ ...(await w.s.db.first("SELECT outcome, order_id FROM payee_event WHERE event_id = 'pe2'")) }, { outcome: 'ignored', order_id: o2.id });
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+});
+
+test('R9-2: a payment that arrives after the sweep timed the order out is credited once by the webhook; a repeat is a duplicate', async () => {
+  const w = await world();
+  const o = await order(w);
+  assert.equal((await status(w, o.id)).status, 'awaiting_payment');
+  w.s.clock.t = o.lock_until + 60000; // lock window passed
+  assert.deepEqual(await expireOrdersFor(w), { expired: 1 });
+  assert.equal((await status(w, o.id)).status, 'failed');
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const r = await hook(w, A, 'LEGACY', raw, 'late1');
+  assert.deepEqual([r.status, r.body.result], [200, 'recorded']);
+  assert.equal((await status(w, o.id)).status, 'paid');
+  const credits = async () => (await w.s.db.first("SELECT COALESCE(SUM(delta),0) n FROM entry WHERE delta > 0")).n;
+  assert.equal(await credits(), 500);
+  assert.deepEqual((await evs(w)).map((e) => [e.event_id, e.outcome, e.order_id]), [['late1', 'recorded', o.id]]);
+  assert.ok((await P.listPayeeAudit(w.owner)).entries.some((e) => e.action === 'webhook.recorded'));
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'late1')).body.result, 'duplicate');
+  assert.equal((await hook(w, A, 'LEGACY', raw, 'late2')).body.result, 'duplicate');
+  assert.equal(await credits(), 500);
+  // a failed order with the wrong currency is refused for good and not credited
+  const o2 = await order(w);
+  w.s.clock.t = o2.lock_until + 60000;
+  await expireOrdersFor(w);
+  const bad = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o2.rail_order_id, pay: 'pay_W5', amount: o2.amount_minor, currency: 'INR' }), 'late3');
+  assert.equal(bad.body.result, 'currency_mismatch');
+  assert.equal((await status(w, o2.id)).status, 'failed');
+  assert.equal(await credits(), 500);
+});
+test('R10-1: the one write for a stored event finishes a pending row and never rewrites a row that is already final', async () => {
+  const w = await world();
+  const o = await order(w);
+  const keep = (id, outcome, orderId, at) => w.s.db.run(KEEP_SQL, A, id, 'payment.captured', orderId, outcome, at);
+  const row = (id) => w.s.db.first('SELECT outcome, order_id, received_at FROM payee_event WHERE payee_id = ? AND event_id = ?', A, id);
+  await keep('k1', 'pending_unmatched', null, 100);
+  assert.deepEqual({ ...(await row('k1')) }, { outcome: 'pending_unmatched', order_id: null, received_at: 100 });
+  await keep('k1', 'recorded', o.id, 200); // the retry finishes the pending row
+  assert.deepEqual({ ...(await row('k1')) }, { outcome: 'recorded', order_id: o.id, received_at: 200 });
+  await keep('k1', 'ignored', null, 300); // a final row is not touched again
+  assert.deepEqual({ ...(await row('k1')) }, { outcome: 'recorded', order_id: o.id, received_at: 200 });
+  await keep('k2', 'ignored', null, 400);
+  await keep('k2', 'recorded', o.id, 500);
+  assert.deepEqual({ ...(await row('k2')) }, { outcome: 'ignored', order_id: null, received_at: 400 }, 'an ignored row stays ignored');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM payee_event WHERE payee_id = ?', A)).n, 2);
+});
+
+const expireOrdersFor = (w) => expireOrders({ ...w.owner });

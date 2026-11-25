@@ -1,6 +1,6 @@
 # What the owner and IT Services need to supply for the central pay service
 
-Written for the owner (Rajat Agarwal) and for whoever carries out the steps. Version: Moneypenny 0.2.14 (prepared, not deployed).
+Written for the owner (Rajat Agarwal) and for whoever carries out the steps. Version: Moneypenny 0.2.16 (prepared, not deployed).
 
 **Status in one line:** the Moneypenny side is built and tested against a stand-in for the central pay service, and it is switched off. No real call is made and no money moves until the items below are supplied and two flags are turned on.
 
