@@ -3,12 +3,15 @@ export function adminPage() {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Moneypenny admin</title>
 <style>
+.mark139{position:absolute;top:0;left:0;right:0;margin:0;padding:1px 0 0;text-align:center;line-height:1;pointer-events:none;user-select:none;z-index:2147483647;font-family:"Noto Sans Devanagari","Mukta","Nirmala UI","Mangal","Kohinoor Devanagari","Devanagari Sangam MN",sans-serif;font-size:6px;font-weight:700;color:#0B2A6B}
+.mark139 span{display:inline-block;border-bottom:.5px solid #7A1010;padding-bottom:.5px}
 body{font:15px/1.5 system-ui,sans-serif;margin:0;padding:16px;max-width:880px;margin-inline:auto;background:#fafaf7;color:#1c1c1c}
 h1{font-size:20px} input,button{font:inherit;padding:6px 8px} input{border:1px solid #bbb;border-radius:6px}
 table{border-collapse:collapse;width:100%} td,th{border-bottom:1px solid #ddd;padding:4px 6px;text-align:left;vertical-align:top}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0} #msg{color:#0b6b57;min-height:1.4em} pre{white-space:pre-wrap;font-size:12px}
 @media (prefers-color-scheme:dark){body{background:#151515;color:#eee} input{background:#222;color:#eee;border-color:#555}}
 </style></head><body>
+<div class="mark139" lang="hi" aria-hidden="true"><span>१३९</span></div>
 <h1>Moneypenny admin (local)</h1>
 <div class="row"><input id="kid" placeholder="admin key id" size="26"><input id="sec" type="password" placeholder="admin key secret" size="26"><button id="load">Load</button></div>
 <div id="msg"></div>
