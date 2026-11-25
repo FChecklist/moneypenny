@@ -7,7 +7,7 @@
 // so the gateway stops retrying. They are never applied. A paused or retired payee still accepts payments (money in means credits).
 // A draft payee accepts only test orders. Never a secret value or the raw body in an answer, an audit row or the event table.
 // The same payment id for an order that is already paid with it answers 'duplicate' and writes nothing (the event id header is not signed, so a replayed body can carry a fresh one).
-// Bad signatures: 429 is decided per source and payee (see sourceBucket); the audit row is per payee. A good signature is never counted and never refused.
+// Bad signatures, and a payee with its webhook secret missing: 429 is decided per source and payee (see countFailure and sourceBucket); the audit row is per payee per minute. A good signature is never counted and never refused.
 import { ApiError } from './util.js';
 import { gate, chainRow, view } from './payees.js';
 import { gatewayFor } from './gateways/index.js';
@@ -36,6 +36,24 @@ function sourceBucket(headers) {
 }
 
 /**
+ * Counts one failed call for this payee and source in the current minute, and returns the counts. Used by BOTH failure paths that a caller can
+ * repeat for free: a bad signature, and a payee whose webhook secret is missing from the platform store (every well-formed call fails there).
+ * Two counters per minute: all failed calls for this payee (sizes the chained log: at most one row per payee per minute, with the count of the
+ * minute before), and the failed calls of this source for this payee (decides the 429: one flooding source cannot use up the budget of another).
+ */
+async function countFailure(ctx, payee, headers) {
+  const win = Math.floor(ctx.now() / 60000);
+  const all = `whbad:${payee.payee_id}`;
+  const mine = `${all}:${sourceBucket(headers)}`;
+  for (const key of [all, mine]) await ctx.db.run('INSERT INTO rate_limit (key_id, window, n) VALUES (?,?,1) ON CONFLICT(key_id, window) DO UPDATE SET n = n + 1', key, win);
+  await ctx.db.run("DELETE FROM rate_limit WHERE key_id LIKE 'whbad:%' AND window < ?", win - 5);
+  const total = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', all, win)).n;
+  const fromSource = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', mine, win)).n;
+  return { win, total, fromSource, over: fromSource > BAD_PER_MINUTE, previous: async () => (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', all, win - 1))?.n ?? 0 };
+}
+const tooMany = () => done(429, { error: { code: 'rate_limited', message: 'Too many bad calls. Slow down.' } });
+
+/**
  * ctx: { db, now, env | secrets, fetch? }. `adapters` is for tests. Returns { status, body }. Never throws for a bad signature,
  * so the audit row for it is kept (a throw inside a transaction would undo it).
  */
@@ -54,7 +72,14 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
     ev = await gatewayFor(payee, { reader, fetch: ctx.fetch ?? noNetwork, adapters: adapters ?? undefined }).verifyWebhook(raw, headers);
   } catch (e) {
     if (e instanceof ApiError && e.code === 'payee_secret_missing') {
-      await chainRow(ctx, ctx.db, 'webhook.secret_missing', () => ({ payee_id: payee.payee_id }));
+      // Every well-formed call fails here, so a caller could repeat it for free. It is counted like a bad signature (same per-source budget, same
+      // one audit row per payee per minute) and nothing else is written: no event row, no order change, no credit.
+      const bad = await countFailure(ctx, payee, headers);
+      if (bad.over) return tooMany();
+      if (bad.total === 1) {
+        const before = await bad.previous();
+        await chainRow(ctx, ctx.db, 'webhook.secret_missing', () => ({ payee_id: payee.payee_id, window: bad.win, count: bad.total, previous_minute_count: before }));
+      }
       throw new ApiError(500, 'payee_secret_missing', 'The webhook secret of this payee is not in the platform store.');
     }
     throw e;
@@ -62,19 +87,11 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
   if (!ev.ok) {
     // Only here, after the cheap checks (flag, size, signature shape, payee exists) and the real signature check, is anything counted.
     // A good signature is never counted and never refused, so nobody's bad calls can lock out the real gateway.
-    // Two counters per minute: all bad calls for this payee (sizes the chained log: one row per payee per minute, with the count of the minute before),
-    // and the bad calls of this source for this payee (decides the 429: one flooding source cannot use up the budget of another).
-    const win = Math.floor(ctx.now() / 60000);
-    const all = `whbad:${payee.payee_id}`;
-    const mine = `${all}:${sourceBucket(headers)}`;
-    for (const key of [all, mine]) await ctx.db.run('INSERT INTO rate_limit (key_id, window, n) VALUES (?,?,1) ON CONFLICT(key_id, window) DO UPDATE SET n = n + 1', key, win);
-    await ctx.db.run("DELETE FROM rate_limit WHERE key_id LIKE 'whbad:%' AND window < ?", win - 5);
-    const total = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', all, win)).n;
-    const fromSource = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', mine, win)).n;
-    if (fromSource > BAD_PER_MINUTE) return done(429, { error: { code: 'rate_limited', message: 'Too many bad calls. Slow down.' } });
-    if (total === 1) {
-      const before = (await ctx.db.first('SELECT n FROM rate_limit WHERE key_id = ? AND window = ?', all, win - 1))?.n ?? 0;
-      await chainRow(ctx, ctx.db, 'webhook.bad_signature', () => ({ payee_id: payee.payee_id, window: win, count: total, previous_minute_count: before }));
+    const bad = await countFailure(ctx, payee, headers);
+    if (bad.over) return tooMany();
+    if (bad.total === 1) {
+      const before = await bad.previous();
+      await chainRow(ctx, ctx.db, 'webhook.bad_signature', () => ({ payee_id: payee.payee_id, window: bad.win, count: bad.total, previous_minute_count: before }));
     }
     return done(401, { error: { code: 'webhook_bad_signature', message: 'Signature not accepted.' } });
   }

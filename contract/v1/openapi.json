@@ -574,7 +574,6 @@
                 "type": "string"
               }
             },
-            "required": [],
             "additionalProperties": false
           },
           "status": {
@@ -4346,7 +4345,7 @@
       "post": {
         "operationId": "payeeWebhook",
         "summary": "Gateway event for one payee",
-        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate: the same event id, and also the same payment id for an order already paid with it (nothing is stored then). An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee. Final refusals (wrong currency, order already paid with another payment) are stored once as ignored and answer 200. A short amount or an order not yet awaiting payment answers 409 with retry true and the event id is not stored, so the gateway retries. Too many bad signatures from one source for one payee in a minute answer 429 for that source; a good signature is never counted or refused.",
+        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate: the same event id, and also the same payment id for an order already paid with it (nothing is stored then). An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee. Final refusals (wrong currency, order already paid with another payment) are stored once as ignored and answer 200. A short amount or an order not yet awaiting payment answers 409 with retry true and the event id is not stored, so the gateway retries. Too many bad signatures from one source for one payee in a minute answer 429 for that source, and calls for a payee whose webhook secret is missing from the platform store are counted the same way (500, then 429); a good signature is never counted or refused.",
         "x-rw": "write",
         "x-money": true,
         "x-permission-level": "gateway",

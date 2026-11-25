@@ -57,7 +57,10 @@ export const GUARDS = [
   ['owner-nonce-keep', 'an owner nonce is kept for the time window plus a clock-skew margin', 'src/api.js', 'now() - OWNER_NONCE_KEEP_MS', 'now() - OWNER_WINDOW_MS'],
   ['webhook-repeat-payment', 'a payment already applied to its order answers duplicate and writes nothing', 'src/webhooks-in.js', "if (out.already) return done(200, { result: 'duplicate' });", ''],
   ['webhook-source-limit', 'bad signatures are counted per source, so one flood cannot use up another source\'s budget', 'src/webhooks-in.js', 'const mine = `${all}:${sourceBucket(headers)}`;', 'const mine = `${all}:x`;'],
-  ['webhook-bad-limit-answer', 'too many bad signatures from one source get 429', 'src/webhooks-in.js', 'if (fromSource > BAD_PER_MINUTE) return done(429', 'if (false) return done(429'],
+  ['webhook-bad-limit-answer', 'too many bad signatures from one source get 429', 'src/webhooks-in.js', 'const bad = await countFailure(ctx, payee, headers);\n    if (bad.over) return tooMany();', 'const bad = await countFailure(ctx, payee, headers);\n    if (false) return tooMany();'],
+  ['webhook-missing-secret-limit', 'a payee with its webhook secret missing is counted too: too many calls from one source get 429, not a chained audit row each', 'src/webhooks-in.js', 'const bad = await countFailure(ctx, payee, headers);\n      if (bad.over) return tooMany();', 'const bad = await countFailure(ctx, payee, headers);\n      if (false) return tooMany();'],
+  ['tenant-nonce-cleanup-keep', 'the nonce cleanup of a tenant call is never shorter than the owner nonce keep time', 'src/auth.js', 'ctx.now() - 2 * MAX_SKEW', 'ctx.now() - MAX_SKEW'],
+  ['payee-gateway-list', 'a payee can only name a gateway that has an adapter', 'src/payees.js', 'export const GATEWAYS = Object.keys(ADAPTERS);', "export const GATEWAYS = [...Object.keys(ADAPTERS), 'no_adapter'];"],
   // --- rate limits and size
   ['rate-limit', 'a key has a calls-per-minute limit', 'src/auth.js', 'if (r.n > limit) return { limited: true };', ''],
   ['rate-limit-answer', 'a limited call gets 429', 'src/api.js', "if (auth.limited) throw", 'if (false) throw'],

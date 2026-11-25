@@ -344,7 +344,8 @@ test('R5-4: 100 bad signatures write one audit row per minute and are rate limit
 
 test('R5-5: owner nonces older than the keep time are pruned and the owner key is rate limited per minute', async () => {
   const w = await world();
-  const { OWNER_NONCE_KEEP_MS = 5 * 60000 } = await import('../src/api.js');
+  const { OWNER_NONCE_KEEP_MS } = await import('../src/api.js'); // no default: a missing export must fail here, not pass on a made-up value
+  assert.ok(Number.isFinite(OWNER_NONCE_KEEP_MS) && OWNER_NONCE_KEEP_MS > 0, 'OWNER_NONCE_KEEP_MS is not exported by src/api.js');
   await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'ancient', ?)", w.s.now() - OWNER_NONCE_KEEP_MS - 1000);
   await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'recent', ?)", w.s.now() - 60000);
   assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
@@ -569,7 +570,8 @@ test('R7-3: the bad-signature limit is per source and payee: one source cannot u
 
 test('R7-4: an owner nonce outlives the accepted time window plus a clock-skew margin (oldest accepted time, newest accepted time, and the keep boundary)', async () => {
   const w = await world();
-  const { OWNER_WINDOW_MS = 5 * 60000, OWNER_NONCE_KEEP_MS = 5 * 60000 } = await import('../src/api.js');
+  const { OWNER_WINDOW_MS, OWNER_NONCE_KEEP_MS } = await import('../src/api.js'); // no defaults: a missing export must fail here
+  assert.ok(Number.isFinite(OWNER_WINDOW_MS) && Number.isFinite(OWNER_NONCE_KEEP_MS), 'OWNER_WINDOW_MS and OWNER_NONCE_KEEP_MS must both be exported by src/api.js');
   assert.ok(OWNER_NONCE_KEEP_MS >= OWNER_WINDOW_MS + 60000, 'a nonce must be kept for the window plus at least a minute of clock skew');
   const t0 = w.s.now();
   const call = (ts, nonce) => oc(w, 'GET', '/v1/owner/payees', undefined, { ts, nonce });
@@ -597,8 +599,14 @@ test('R7-4: an owner nonce outlives the accepted time window plus a clock-skew m
   const left = (await w.s.db.all("SELECT nonce FROM nonce WHERE key_id = 'owner'")).map((x) => x.nonce);
   assert.ok(left.includes('kept') && !left.includes('gone') && !left.includes('old-edge') && !left.includes('new-edge'));
   // (d) the other cleaner: every signed call by a tenant key also deletes old nonces of all key ids. It must never delete one the owner path still keeps.
+  // 'inside-keep' is older than the time window but younger than the keep time: the owner path keeps it, so a tenant cleanup that is only as long as
+  // the window (or any length under the keep time) would delete it, and this test would fail.
+  const t1 = w.s.now();
+  await w.s.db.run("INSERT INTO nonce (key_id, nonce, ts) VALUES ('owner', 'inside-keep', ?)", t1 - OWNER_WINDOW_MS - 1000);
   assert.equal((await w.s.read.get('/v1/balance?email=nobody%40example.com')).status, 200);
-  assert.ok((await w.s.db.all("SELECT nonce FROM nonce WHERE key_id = 'owner'")).some((x) => x.nonce === 'kept'));
+  const after = (await w.s.db.all("SELECT nonce FROM nonce WHERE key_id = 'owner'")).map((x) => x.nonce);
+  assert.ok(after.includes('kept'), 'a tenant call deleted an owner nonce that is exactly at the keep boundary');
+  assert.ok(after.includes('inside-keep'), 'a tenant call deleted an owner nonce that is older than the window but younger than the keep time');
 });
 
 test('R7-5: a paid order answers a repeat confirm before its figures are judged: the same payment id gets the first answer, another payment id gets order_already_paid', async () => {
@@ -617,4 +625,53 @@ test('R7-5: a paid order answers a repeat confirm before its figures are judged:
   }
   assert.equal((await s.db.first("SELECT COUNT(*) n FROM lot WHERE source_ref = 'pay_rp1'")).n, 1);
   assert.equal((await s.db.first("SELECT COUNT(*) n FROM lot WHERE source_ref = 'pay_rp2'")).n, 0);
+});
+
+// ---------------- round 8 ----------------
+test('R8-4: a payee whose webhook secret is missing: a flood of well-formed calls is counted per source, audit rows stay bounded, money state does not change', async () => {
+  const w = await world();
+  const o = await order(w);
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const sig = await hmacHex(WH('LEGACY'), raw); // well formed, and a correct signature: it fails only because the payee's secret has no value in the store
+  const gone = createApp({ db: w.s.db, master: w.s.master, now: w.s.now, env: { MNP_PAYEE_ACCOUNTS: '1' }, aiWithoutStatus: true });
+  const call = async (eventId, source) => {
+    const r = await gone.fetch(new Request(`http://t.local/v1/webhooks/payee/${A}`, { method: 'POST', body: raw, headers: { 'x-razorpay-signature': sig, 'x-razorpay-event-id': eventId, ...(source ? { 'cf-connecting-ip': source } : {}) } }));
+    return { status: r.status, body: await r.json() };
+  };
+  const money = async () => ({
+    orders: await w.s.db.all('SELECT id, status FROM purchase_order ORDER BY id'),
+    entries: (await w.s.db.first('SELECT COUNT(*) n FROM entry')).n,
+    lots: (await w.s.db.first('SELECT COUNT(*) n FROM lot')).n,
+    claims: (await w.s.db.first('SELECT COUNT(*) n FROM payment_ref')).n,
+    events: (await w.s.db.first('SELECT COUNT(*) n FROM payee_event')).n,
+  });
+  const rows = () => w.s.db.all("SELECT detail FROM payee_audit WHERE action = 'webhook.secret_missing'");
+  const before = await money();
+  assert.equal(before.orders.find((x) => x.id === o.id).status, 'awaiting_payment');
+  // one source: 20 calls get the 500, the rest of its minute gets 429 (before this round every call got a 500 and a chained audit row)
+  const one = [];
+  for (let i = 0; i < 25; i++) one.push(await call(`ma${i}`, '203.0.113.9'));
+  assert.deepEqual([one.filter((x) => x.status === 500).length, one.filter((x) => x.status === 429).length], [20, 5]);
+  assert.ok(one.filter((x) => x.status === 500).every((x) => x.body.error.code === 'payee_secret_missing'));
+  assert.ok(one.filter((x) => x.status === 429).every((x) => x.body.error.code === 'rate_limited'));
+  // another source has its own budget
+  assert.equal((await call('mb0', '198.51.100.7')).status, 500);
+  // 300 more calls, each from a different source, in the same minute: still one audit row, and the counters stay few
+  for (let i = 0; i < 300; i++) await call(`mc${i}`, `10.0.${Math.floor(i / 250)}.${i % 250}`);
+  assert.equal((await rows()).length, 1);
+  assert.ok((await w.s.db.first("SELECT COUNT(*) n FROM rate_limit WHERE key_id LIKE 'whbad:%'")).n <= 70);
+  assert.equal((await w.s.db.first("SELECT COUNT(*) n FROM payee_audit WHERE action IN ('webhook.secret_missing', 'webhook.bad_signature')")).n, 1);
+  // no money state moved, and no event row was stored for any of the 326 calls
+  assert.deepEqual(await money(), before);
+  // next minute: one more row, with the count of the minute before; still no money state
+  w.s.clock.t += 60000;
+  assert.equal((await call('md0', '203.0.113.9')).status, 500);
+  const all = await rows();
+  assert.equal(all.length, 2);
+  assert.equal(JSON.parse(all[1].detail).previous_minute_count, 25 + 1 + 300);
+  assert.deepEqual(await money(), before);
+  // the flood left nothing behind that blocks the real payment: with the secret in the store again, the same event is applied once
+  const good = await hook(w, A, 'LEGACY', raw, 'ma0');
+  assert.equal(good.body.result, 'recorded');
+  assert.equal((await status(w, o.id)).status, 'paid');
 });
