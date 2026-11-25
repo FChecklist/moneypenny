@@ -2,6 +2,15 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.9 (prepared 2026-11-25; NOT deployed yet)
+
+Payee accounts, chunks F5, F6 and F7. Dark behind `MNP_PAYEE_ACCOUNTS` and not deployed. The money flag is unchanged (OFF).
+
+- F5: `requireOwner` in `src/payees.js` is the one role check (used by every payee change and by `setRoute`). New owner-only `listPayeeAudit` (newest first, paged) and `verifyPayeeAudit` (walks the owner chain, says where it breaks).
+- F6: `/v1/owner/...` routes (list, read, create, edit, activate, pause, retire, set route, secret presence, audit, audit verify). Signed with the master secret: `x-owner-ts`, `x-owner-nonce`, `x-owner-sig`. Each nonce works once. No tenant key class can call them. `createApp` takes `env`, `secrets` and `payees`; the Worker passes the flag and a secret reader that never gives out the master secret. Contract gained the owner and webhook entries (levels `owner` and `gateway`).
+- F7: `src/webhooks-in.js` and `POST /v1/webhooks/payee/{id}`. Bad signature 401 (audit row, no body kept). Unknown payee 404 with no detail. Repeat event id: `duplicate`. Applied through `railConfirm` against the order's own payee. Unknown order, other payee, other event type, draft payee with a live order, and amount or currency mismatch are stored as `ignored` (200). Adapters gained `verifyWebhook` (Razorpay HMAC of the raw body, `x-razorpay-signature`, `x-razorpay-event-id`).
+- Tests: `test/payee-owner-webhook.test.js`; `test/ai.test.js` allows the two new permission levels.
+
 ## 0.2.8 (prepared 2026-11-25; NOT deployed yet)
 
 Payee accounts, chunks F3 and F4. Dark behind `MNP_PAYEE_ACCOUNTS` and not deployed. The money flag is unchanged.

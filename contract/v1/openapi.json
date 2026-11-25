@@ -22,6 +22,7 @@
     "timestamp": "milliseconds; accepted within 5 minutes; a nonce works once per key",
     "idempotency": "Every POST, PUT and DELETE needs an Idempotency-Key header. Keys starting \"pay:\" are reserved for payment routes and must equal pay:<payment_ref>."
   },
+  "x-owner-signing": "Owner calls (/v1/owner/...) are signed with the master secret, not a key: headers x-owner-ts (ms, within 5 minutes), x-owner-nonce (any unique text up to 100 characters) and x-owner-sig = hex(HMAC-SHA256(master, \"mnp-owner\\n\" + ts + \"\\n\" + nonce + \"\\n\" + METHOD + \"\\n\" + pathWithQuery + \"\\n\" + body)). Each nonce works once. An AI key, an admin key or a product key can never make them. They answer payees_disabled unless MNP_PAYEE_ACCOUNTS is on.",
   "x-key-classes": {
     "read": "Balance, quote and price list only.",
     "spend": "A product server: reserve, capture, release, events, order returns. (Stored as scope \"api\".)",
@@ -334,7 +335,7 @@
     },
     "payee_forbidden": {
       "status": 403,
-      "meaning": "Only the owner can change a payee."
+      "meaning": "Only the owner can …."
     },
     "payee_gateway_taken": {
       "status": 409,
@@ -483,6 +484,14 @@
     "unsigned": {
       "status": 401,
       "meaning": "Signed headers are missing."
+    },
+    "webhook_bad_signature": {
+      "status": 401,
+      "meaning": "The gateway signature was not accepted."
+    },
+    "webhook_no_event_id": {
+      "status": 400,
+      "meaning": "The event id is missing."
     },
     "wrong_key_type": {
       "status": 403,
@@ -3117,6 +3126,464 @@
           "path": "/v1/admin/approvals/apr_.../approve",
           "key": "admin",
           "body": {}
+        }
+      }
+    },
+    "/v1/owner/payees": {
+      "get": {
+        "operationId": "ownerListPayees",
+        "summary": "List payees",
+        "description": "Every payee with status, gateway, mode and the NAMES of its secrets. Never a secret value.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "payee_forbidden",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "ownerCreatePayee",
+        "summary": "Add a payee as a draft",
+        "description": "Secret NAMES only. A pasted secret value or a bank detail is refused.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_currencies",
+          "bad_field",
+          "bad_gateway",
+          "bad_mode",
+          "bad_secret_names",
+          "bank_detail_refused",
+          "payee_exists",
+          "payee_forbidden",
+          "payee_setup_incomplete",
+          "payees_disabled",
+          "secret_value_refused"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payees/{id}": {
+      "get": {
+        "operationId": "ownerGetPayee",
+        "summary": "Read one payee",
+        "description": "One payee record.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "payee_forbidden",
+          "payee_not_found",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "ownerEditPayee",
+        "summary": "Change a payee",
+        "description": "Name, gateway, secret names and currencies lock after the first order.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "identity_locked",
+          "mode_fixed",
+          "payee_forbidden",
+          "payee_not_found",
+          "payee_retired",
+          "payee_secret_missing",
+          "payee_setup_incomplete",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payees/{id}/{step}": {
+      "post": {
+        "operationId": "ownerPayeeStep",
+        "summary": "Activate, pause or retire a payee",
+        "description": "step is activate (also resumes a paused payee), pause or retire.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_transition",
+          "payee_forbidden",
+          "payee_gateway_taken",
+          "payee_not_found",
+          "payee_secret_missing",
+          "payee_setup_incomplete",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payees/{id}/secrets": {
+      "get": {
+        "operationId": "ownerPayeeSecrets",
+        "summary": "Check which secret names are present",
+        "description": "True or false for each name. Never a value.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "payee_forbidden",
+          "payee_not_found",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/routes": {
+      "post": {
+        "operationId": "ownerSetRoute",
+        "summary": "Set the payee for a product",
+        "description": "Starts a new route row and closes the open one. Overlap is refused.",
+        "x-rw": "write",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_field",
+          "bad_product",
+          "payee_forbidden",
+          "payee_not_active",
+          "payee_not_found",
+          "payee_setup_incomplete",
+          "payees_disabled",
+          "route_overlap",
+          "tenant_not_found"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payee_audit": {
+      "get": {
+        "operationId": "ownerPayeeAudit",
+        "summary": "The owner audit log of payees",
+        "description": "Newest first. Ids and field names only.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "bad_field",
+          "payee_forbidden",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/owner/payee_audit/verify": {
+      "get": {
+        "operationId": "ownerPayeeAuditVerify",
+        "summary": "Check the owner audit chain",
+        "description": "Says ok or where the chain breaks.",
+        "x-rw": "read",
+        "x-money": false,
+        "x-permission-level": "owner",
+        "x-key-classes": [
+          "owner"
+        ],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "payee_forbidden",
+          "payees_disabled"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/webhooks/payee/{id}": {
+      "post": {
+        "operationId": "payeeWebhook",
+        "summary": "Gateway event for one payee",
+        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate. An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee.",
+        "x-rw": "write",
+        "x-money": true,
+        "x-permission-level": "gateway",
+        "x-key-classes": [],
+        "x-ai": {
+          "access": "no",
+          "note": "An AI key is refused."
+        },
+        "x-requires-idempotency-key": false,
+        "x-untrusted-fields": [],
+        "x-error-codes": [
+          "payee_not_found",
+          "payee_secret_missing",
+          "payees_disabled",
+          "too_large",
+          "webhook_bad_signature",
+          "webhook_no_event_id"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success. Every answer has ok:true."
+          },
+          "default": {
+            "description": "Failure. ok:false and error.code is stable; see x-error-codes.",
+            "content": {
+              "application/json": {
+                "example": {
+                  "ok": false,
+                  "error": {
+                    "code": "wrong_key_type",
+                    "message": "This key cannot use this route."
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

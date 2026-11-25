@@ -2,7 +2,7 @@
 //   node scripts/gen-contract.js          writes the file
 //   import { buildContract }               used by the test that checks the file is up to date
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { OPS, CLASS_OF_SCOPE } from '../src/contract.js';
+import { OPS, OWNER_OPS, CLASS_OF_SCOPE } from '../src/contract.js';
 import { ROUTES } from '../src/api.js';
 
 const root = new URL('../', import.meta.url);
@@ -27,11 +27,13 @@ export function errorCatalogue() {
       if (!out[m[2]]) out[m[2]] = { status: Number(m[1]), meaning: m[4].replace(/\$\{[^}]*\}/g, '…') };
     }
   }
-  for (const [code, status, meaning] of [['unsigned', 401, 'Signed headers are missing.'], ['paused_global', 503, 'The global off-switch has this service (or its reads or writes) switched off.'], ['action_disabled', 503, 'The global off-switch has this one action switched off.'], ['status_unknown', 503, 'The off-switch could not be read, so AI access is paused.'], ['internal', 500, 'Something went wrong on our side. Nothing was changed.'], ['payment_not_verified', 402, 'That payment has not been confirmed by the payment side, or does not cover this.'], ['sale_reversed', 422, 'The sale was taken back.'], ['cash_exceeds_payment', 422, 'The cash named is more than the noted payment, or in another currency.'], ['payment_already_used', 409, 'That payment was already used.'], ['bad_ask', 400, 'The ask is missing something or is not valid.']]) out[code] ||= { status, meaning };
+  for (const [code, status, meaning] of [['webhook_bad_signature', 401, 'The gateway signature was not accepted.'], ['unsigned', 401, 'Signed headers are missing.'], ['paused_global', 503, 'The global off-switch has this service (or its reads or writes) switched off.'], ['action_disabled', 503, 'The global off-switch has this one action switched off.'], ['status_unknown', 503, 'The off-switch could not be read, so AI access is paused.'], ['internal', 500, 'Something went wrong on our side. Nothing was changed.'], ['payment_not_verified', 402, 'That payment has not been confirmed by the payment side, or does not cover this.'], ['sale_reversed', 422, 'The sale was taken back.'], ['cash_exceeds_payment', 422, 'The cash named is more than the noted payment, or in another currency.'], ['payment_already_used', 409, 'That payment was already used.'], ['bad_ask', 400, 'The ask is missing something or is not valid.']]) out[code] ||= { status, meaning };
   return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 const scopesFor = (op) => {
+  if (op.level === 'owner') return { scopes: [], idem: false, owner: true };
+  if (op.level === 'gateway') return { scopes: [], idem: false, owner: false };
   const hit = ROUTES.find((r) => r[0] === op.method && r[1] === op.path);
   if (hit) return { scopes: hit[2], idem: hit[3] };
   if (op.path === '/health') return { scopes: [], idem: false };
@@ -41,7 +43,7 @@ const scopesFor = (op) => {
 export function buildContract() {
   const errors = errorCatalogue();
   const paths = {};
-  for (const op of OPS) {
+  for (const op of [...OPS, ...OWNER_OPS]) {
     const { scopes, idem } = scopesFor(op);
     const ex = examples[EX[op.id]];
     const o = {
@@ -51,7 +53,7 @@ export function buildContract() {
       'x-rw': op.rw,
       'x-money': op.money,
       'x-permission-level': op.level,
-      'x-key-classes': scopes.map((s) => CLASS_OF_SCOPE[s]),
+      'x-key-classes': op.level === 'owner' ? ['owner'] : scopes.map((s) => CLASS_OF_SCOPE[s]),
       'x-ai': { access: op.ai, note: op.ai === 'ask' ? 'Creates a request a person must approve. Never does the action itself.' : op.ai === 'read' ? 'An AI key may call this. Answers flag text written by others in untrusted.fields.' : 'An AI key is refused.' },
       'x-requires-idempotency-key': idem,
       'x-untrusted-fields': op.untrusted ?? [],
@@ -77,6 +79,7 @@ export function buildContract() {
       timestamp: 'milliseconds; accepted within 5 minutes; a nonce works once per key',
       idempotency: 'Every POST, PUT and DELETE needs an Idempotency-Key header. Keys starting "pay:" are reserved for payment routes and must equal pay:<payment_ref>.',
     },
+    'x-owner-signing': 'Owner calls (/v1/owner/...) are signed with the master secret, not a key: headers x-owner-ts (ms, within 5 minutes), x-owner-nonce (any unique text up to 100 characters) and x-owner-sig = hex(HMAC-SHA256(master, "mnp-owner\\n" + ts + "\\n" + nonce + "\\n" + METHOD + "\\n" + pathWithQuery + "\\n" + body)). Each nonce works once. An AI key, an admin key or a product key can never make them. They answer payees_disabled unless MNP_PAYEE_ACCOUNTS is on.',
     'x-key-classes': {
       read: 'Balance, quote and price list only.',
       spend: 'A product server: reserve, capture, release, events, order returns. (Stored as scope "api".)',

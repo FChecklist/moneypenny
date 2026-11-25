@@ -1,15 +1,22 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
-  "preparedAt": "2026-11-25T02:00:00Z",
-  "preparedAtIST": "2026-11-25T07:30:00+05:30",
+  "preparedAt": "2026-11-25T06:00:00Z",
+  "preparedAtIST": "2026-11-25T11:30:00+05:30",
   "releasedAt": null,
   "releasedAtIST": null,
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.9",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T06:00:00Z",
+      "releasedAt": null,
+      "notes": "Payee accounts F5 (owner scope), F6 (owner API routes) and F7 (webhook intake per payee), dark behind MNP_PAYEE_ACCOUNTS. One owner-role check (requireOwner) now guards every payee and route change and the new owner-only audit view and chain check. Owner routes under /v1/owner (list, read, create, edit, activate, pause, retire, set route, check secret presence, audit, audit verify) are thin calls to the existing functions, signed with the master secret (time, nonce, method, path, body; each nonce works once); keys of every tenant class are refused. New POST /v1/webhooks/payee/{id}: the signature is checked with that payee's webhook secret on the raw body, an event id is kept once per payee, and the payment is applied by the same code as rail confirm against the order's own payee (never today's route). Unknown order, other payee, other event types and mismatched amounts are stored as ignored (answer 200) and never credit. Paused and retired payees still accept payments; a draft payee accepts only test orders. Contract file regenerated. No real gateway call, no flag changed, money flag stays OFF, nothing deployed."
+    },
     {
       "version": "0.2.8",
       "status": "prepared, not deployed",

@@ -49,6 +49,23 @@ export const OPS = [
   { id: 'adminDecideApproval', method: 'POST', path: '/v1/admin/approvals/{id}/{decision}', level: 'admin', rw: 'write', money: true, ai: 'no', summary: 'Approve or reject a request', plain: 'Approve runs the asked action once, as the person who approved. Reject does nothing.', errors: ['no_approval', 'already_decided', 'approval_expired'] },
 ];
 
+// Owner calls (F6) and the payee webhook (F7). Not in OPS: they are not signed-key routes and have no tenant.
+// Owner calls are signed with the master secret (headers x-owner-ts, x-owner-sig) and work only while MNP_PAYEE_ACCOUNTS is on.
+// The webhook has no key at all: the gateway signature, checked with that payee's webhook secret, is the login.
+const own = (id, method, path, rw, summary, plain, errors = []) => ({ id, method, path, level: 'owner', rw, money: false, ai: 'no', summary, plain, errors: ['payees_disabled', 'payee_forbidden', ...errors] });
+export const OWNER_OPS = [
+  own('ownerListPayees', 'GET', '/v1/owner/payees', 'read', 'List payees', 'Every payee with status, gateway, mode and the NAMES of its secrets. Never a secret value.'),
+  own('ownerGetPayee', 'GET', '/v1/owner/payees/{id}', 'read', 'Read one payee', 'One payee record.', ['payee_not_found']),
+  own('ownerCreatePayee', 'POST', '/v1/owner/payees', 'write', 'Add a payee as a draft', 'Secret NAMES only. A pasted secret value or a bank detail is refused.', ['bad_field', 'bad_gateway', 'bad_mode', 'bad_secret_names', 'bad_currencies', 'secret_value_refused', 'bank_detail_refused', 'payee_exists', 'payee_setup_incomplete']),
+  own('ownerEditPayee', 'PUT', '/v1/owner/payees/{id}', 'write', 'Change a payee', 'Name, gateway, secret names and currencies lock after the first order.', ['payee_not_found', 'payee_retired', 'mode_fixed', 'identity_locked', 'payee_secret_missing', 'payee_setup_incomplete']),
+  own('ownerPayeeStep', 'POST', '/v1/owner/payees/{id}/{step}', 'write', 'Activate, pause or retire a payee', 'step is activate (also resumes a paused payee), pause or retire.', ['payee_not_found', 'bad_transition', 'payee_secret_missing', 'payee_gateway_taken', 'payee_setup_incomplete']),
+  own('ownerPayeeSecrets', 'GET', '/v1/owner/payees/{id}/secrets', 'read', 'Check which secret names are present', 'True or false for each name. Never a value.', ['payee_not_found']),
+  own('ownerSetRoute', 'POST', '/v1/owner/routes', 'write', 'Set the payee for a product', 'Starts a new route row and closes the open one. Overlap is refused.', ['bad_field', 'bad_product', 'tenant_not_found', 'payee_not_found', 'payee_not_active', 'route_overlap', 'payee_setup_incomplete']),
+  own('ownerPayeeAudit', 'GET', '/v1/owner/payee_audit', 'read', 'The owner audit log of payees', 'Newest first. Ids and field names only.', ['bad_field']),
+  own('ownerPayeeAuditVerify', 'GET', '/v1/owner/payee_audit/verify', 'read', 'Check the owner audit chain', 'Says ok or where the chain breaks.'),
+  { id: 'payeeWebhook', method: 'POST', path: '/v1/webhooks/payee/{id}', level: 'gateway', rw: 'write', money: true, ai: 'no', summary: 'Gateway event for one payee', plain: 'Signed by the gateway with that payee\'s webhook secret. A repeat answers duplicate. An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order\'s own payee.', errors: ['payees_disabled', 'payee_not_found', 'webhook_bad_signature', 'webhook_no_event_id', 'payee_secret_missing', 'too_large'] },
+];
+
 const re = (p) => new RegExp('^' + p.replace(/\{[a-z_]+\}/g, '[A-Za-z0-9_]+') + '$');
 const MATCHERS = OPS.map((o) => ({ o, re: re(o.path) }));
 /** The operation for a real request, or null. */

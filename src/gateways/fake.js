@@ -1,5 +1,6 @@
 // Fake gateway for tests. No network, no real money. Same shape as every adapter.
 import { hmacHex, safeEqual } from '../util.js';
+import { normalizeRazorpayEvent } from './razorpay.js';
 
 export function fakeGateway({ secrets }) {
   const orders = new Map();
@@ -15,6 +16,11 @@ export function fakeGateway({ secrets }) {
     async verifySignature({ order_id, payment_id, signature }) {
       this.calls.push('verifySignature');
       return safeEqual(await hmacHex(secrets.key_secret, `${order_id}|${payment_id}`), String(signature || ''));
+    },
+    async verifyWebhook(raw, headers) {
+      this.calls.push('verifyWebhook');
+      if (!safeEqual(await hmacHex(secrets.webhook_secret, raw), String(headers.get('x-razorpay-signature') || ''))) return { ok: false };
+      return { ok: true, event_id: headers.get('x-razorpay-event-id') || null, ...normalizeRazorpayEvent(raw) };
     },
     async refund({ payment_id, amount_minor, idem }) {
       this.calls.push('refund');

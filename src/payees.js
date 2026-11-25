@@ -45,11 +45,13 @@ export const gate = async (ctx, fillId, readOnly = false) => {
     throw new ApiError(409, 'payee_setup_incomplete', `An active payee has no secret names. An owner must fill in the secret names first. Payee: ${who}.`);
   }
 };
-// Every change needs the owner role: ctx.callerType === 'owner' (the repo's existing caller type, set only by
-// the code that builds the context, never by a request). The actor must be a real name, not 'system'.
-const ownerOnly = (ctx) => {
-  if (ctx.callerType !== 'owner' || !ctx.actor || ctx.actor === 'system') throw new ApiError(403, 'payee_forbidden', 'Only the owner can change a payee.');
+// The ONE place that checks the owner role (F5). Every payee and route change, and the owner-only audit view, call it.
+// ctx.callerType === 'owner' is set only by the code that builds the context, never by a request body.
+// The actor must be a real name, not 'system'. An AI key, a tenant admin key or a product key never gets this role.
+export const requireOwner = (ctx, what = 'change a payee') => {
+  if (ctx.callerType !== 'owner' || !ctx.actor || ctx.actor === 'system') throw new ApiError(403, 'payee_forbidden', `Only the owner can ${what}.`);
 };
+const ownerOnly = (ctx) => requireOwner(ctx);
 
 /** One hash-chained payee_audit row, written in the caller's transaction. Never a secret value: secret_names holds NAMES only. */
 const SAFE = ['legal_name', 'display_name', 'gateway', 'mode', 'status', 'currencies', 'checkout', 'invoice', 'secret_names', 'note', 'version'];
@@ -316,4 +318,29 @@ export async function checkPayeeSecrets(ctx, id) {
   await gate(ctx, undefined, true);
   const r = secretPresence(ctx, parseNames((await load(ctx, id)).secret_names));
   return { payee_id: id, ok: r.ok, found: r.found, missing: r.missing };
+}
+
+// ---------- owner-only audit view (F5) ----------
+const auditHash = (r, prev) => sha256Hex(JSON.stringify([r.seq, r.ts, r.actor, r.action, r.detail, prev, r.key_id ?? null]));
+/** Newest first. Owner only. Detail holds ids and names of fields only (see auditRow), never a secret value or free text. */
+export async function listPayeeAudit(ctx, { limit = 50, before_seq } = {}) {
+  await gate(ctx, undefined, true);
+  requireOwner(ctx, 'see the payee log');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new ApiError(400, 'bad_field', 'limit must be a whole number from 1 to 200.');
+  if (before_seq != null && (!Number.isInteger(before_seq) || before_seq < 1)) throw new ApiError(400, 'bad_field', 'before_seq must be a whole number of 1 or more.');
+  const rows = await ctx.db.all('SELECT seq, ts, actor, key_id, action, detail FROM payee_audit WHERE (? IS NULL OR seq < ?) ORDER BY seq DESC LIMIT ?', before_seq ?? null, before_seq ?? null, limit);
+  return { entries: rows.map((r) => ({ ...r, detail: JSON.parse(r.detail) })) };
+}
+/** Walks the whole owner chain and says where it breaks. Owner only. */
+export async function verifyPayeeAudit(ctx) {
+  await gate(ctx, undefined, true);
+  requireOwner(ctx, 'check the payee log');
+  let prev = 'GENESIS';
+  let n = 0;
+  for (const r of await ctx.db.all('SELECT * FROM payee_audit ORDER BY seq')) {
+    n++;
+    if (r.seq !== n || r.prev_hash !== prev || r.hash !== (await auditHash(r, prev))) return { ok: false, broken_at: r.seq };
+    prev = r.hash;
+  }
+  return { ok: true, entries: n };
 }

@@ -2,7 +2,7 @@
 // resolvePayee picks who receives the money for a new order. The choice is copied onto the order once
 // (payee id, route, version, mode, snapshot) and never changes later. Credits, lots, holds and the ledger never read it.
 import { ApiError, newId } from './util.js';
-import { gate, chainRow, text, view } from './payees.js';
+import { gate, chainRow, text, view, requireOwner } from './payees.js';
 import { emit } from './outbox.js';
 
 const PRODUCT_RE = /^(\*|[a-z][a-z0-9_]{1,63})$/;
@@ -58,7 +58,7 @@ export async function orderPayeeColumns(ctx, args) {
 /** Owner only. Adds a route row that starts at effective_from. The open row for the same key is closed at that instant (the only update). Overlap is refused. */
 export async function setRoute(ctx, b = {}) {
   await gate(ctx);
-  if (ctx.callerType !== 'owner' || !ctx.actor || ctx.actor === 'system') throw new ApiError(403, 'payee_forbidden', 'Only the owner can change a route.');
+  requireOwner(ctx, 'change a route');
   const prod = productId(b.product_id);
   const from = b.effective_from;
   if (!Number.isSafeInteger(from) || from < 0) throw new ApiError(400, 'bad_field', 'effective_from must be a time in milliseconds.');

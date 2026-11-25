@@ -6,6 +6,18 @@ import { resolveSecrets } from '../secrets.js';
 
 const BASE = 'https://api.razorpay.com/v1';
 
+/** Pure: reads a Razorpay webhook body. Only payment.captured and order.paid carry a payment we can apply. Anything unreadable gives normalized null. */
+export function normalizeRazorpayEvent(raw) {
+  let j;
+  try { j = JSON.parse(raw); } catch { return { type: null, normalized: null }; }
+  const type = typeof j?.event === 'string' ? j.event : null;
+  const p = j?.payload?.payment?.entity;
+  if ((type === 'payment.captured' || type === 'order.paid') && p && typeof p.id === 'string' && typeof p.order_id === 'string' && Number.isSafeInteger(p.amount) && typeof p.currency === 'string') {
+    return { type, normalized: { gateway_order_id: p.order_id, payment_id: p.id, amount_minor: p.amount, currency: p.currency } };
+  }
+  return { type, normalized: null };
+}
+
 export function razorpayGateway({ payee, reader, fetch: f }) {
   if (typeof f !== 'function') throw new ApiError(500, 'gateway_not_configured', 'No HTTP client was given to the gateway.');
   const secrets = () => resolveSecrets(reader, payee.secret_names);
@@ -35,6 +47,12 @@ export function razorpayGateway({ payee, reader, fetch: f }) {
     /** Checkout signature: HMAC-SHA256 of "order_id|payment_id" with the key secret. */
     async verifySignature({ order_id, payment_id, signature }) {
       return safeEqual(await hmacHex(secrets().key_secret, `${order_id}|${payment_id}`), String(signature || ''));
+    },
+    /** Webhook check: HMAC-SHA256 of the RAW body with THIS payee's webhook secret, hex, in x-razorpay-signature. Checked before the body is read. */
+    async verifyWebhook(raw, headers) {
+      const ok = safeEqual(await hmacHex(secrets().webhook_secret, raw), String(headers.get('x-razorpay-signature') || ''));
+      if (!ok) return { ok: false };
+      return { ok: true, event_id: headers.get('x-razorpay-event-id') || null, ...normalizeRazorpayEvent(raw) };
     },
     async refund({ payment_id, amount_minor, idem }) {
       const j = await call('POST', `/payments/${encodeURIComponent(payment_id)}/refund`, { amount: amount_minor }, idem);
