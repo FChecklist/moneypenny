@@ -209,14 +209,23 @@ test('F11: dark: the central side needs the registry flag AND its own flag', () 
   assert.equal(centralPayEnabled({ env: { MNP_PAYEE_ACCOUNTS: '1', MNP_CENTRAL_PAY: '1' } }), true);
 });
 
-test('F12 and F13: dark: with either flag off, confirm and health refuse and make no call', async () => {
+test('F12 and F13: dark: with either flag off, confirm and health refuse, make no call and store nothing', async () => {
   const w = await world();
-  const proof = { order_id: 'ord_x', razorpay_order_id: 'order_x', razorpay_payment_id: 'pay_x', razorpay_signature: 'a'.repeat(64) };
-  assert.equal(await code(confirmCentralPayment({ ...w.ctx, central: false }, proof)), 'central_disabled');
-  assert.equal(await code(confirmCentralPayment({ ...w.ctx, payees: false }, proof)), 'payees_disabled');
+  // a real order with a real, paid proof: the only thing that can stop the credit is the switch itself
+  const o = await buyAt(w, 'bingo', { order_ref: 'dark1' });
+  const row = await orow(w, o.order_id);
+  const real = { order_id: o.order_id, ...w.central.pay(row.rail_order_id, { payment_id: 'pay_dark00000001' }) };
+  const calls = w.central.calls.length;
+  const confirmed = async () => (await w.s.db.first("SELECT count(*) n FROM payee_audit WHERE action = 'central.confirmed'")).n;
+  const before = { balance: (await bal(w.s.api, 'p1@example.com')).balance, confirmed: await confirmed() };
+  assert.equal(await code(confirmCentralPayment({ ...w.ctx, central: false }, real)), 'central_disabled');
+  assert.equal(await code(confirmCentralPayment({ ...w.ctx, payees: false }, real)), 'payees_disabled');
   assert.equal(await code(centralHealth({ ...w.ctx, central: false }, w.cId)), 'central_disabled');
   assert.equal(await code(centralHealth({ ...w.ctx, payees: false }, w.cId)), 'payees_disabled');
-  assert.equal(w.central.calls.length, 0);
+  assert.equal(w.central.calls.length, calls); // not one call to the central service
+  assert.deepEqual(await orow(w, o.order_id), row); // the order row is exactly as it was
+  assert.equal((await bal(w.s.api, 'p1@example.com')).balance, before.balance); // nothing credited
+  assert.equal(await confirmed(), before.confirmed); // no audit row for a confirm that never happened
 });
 
 test('F11: dark: the wrapper rail keeps the rail contract, and with the flags off nothing is built', async () => {
@@ -288,6 +297,8 @@ test('F11: a central payee\'s order is never opened by a plain rail (the old rai
   assert.equal(spy.calls, 0);
   assert.equal((await w.s.db.first('SELECT last_error FROM rail_outbox WHERE order_id = ?', o.order_id)).last_error, 'central_rail_off');
   assert.equal((await orow(w, o.order_id)).status, 'pending_rail');
+  assert.equal((await orow(w, o.order_id)).rail_order_id, null); // nothing was opened for it anywhere
+  assert.equal((await w.s.db.first("SELECT count(*) n FROM payee_audit WHERE action = 'central.confirmed'")).n, 0);
 });
 
 test('F11: with no old rail connected, central orders still work and other orders are refused before anything is written', async () => {

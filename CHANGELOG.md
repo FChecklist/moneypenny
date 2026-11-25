@@ -12,6 +12,10 @@ The central IT Services pay service as a payee gateway (F10 to F13). Dark behind
 - F13: `src/central-health.js`: owner only; secret names present true or false, address accepted, service answering.
 - Tests: `test/payee-central.test.js` with `test/fake-central.js` (a stand-in that copies the real validators and status codes). Fifteen guards in `scripts/guards-central.js`. After the merge on 0.2.15: `npm test` passes 445 of 445 (416 on the base plus this branch's own), and the guard check lists 74 guards (59 on the base plus the 15 central ones). Docs: `docs/OWNER-ASK-CENTRAL-PAY-SERVICE.md` (what the owner and IT Services must supply), `docs/PAYEE-CENTRAL-PAY-SERVICE.md`.
 
+### After the first audit round (26 Nov 2026), still 0.2.16
+
+Two audit readers found three open Medium rows each side. Judged row by row: tests now assert the stored outcome (the dark switch leaves the order row, the balance and the audit chain untouched for a real paid proof; a plain rail's retry leaves `rail_order_id` empty and writes no `central.confirmed` row). Judged as not faults, written in `docs/PAYEE-CENTRAL-PAY-SERVICE.md` section 5: no draft-payee check in confirm (a route needs an active payee and a payee never goes back to draft); the payer e-mail is compared with the account e-mail now (no code changes it). The seven central codes in `contract/v1/openapi.json` are there because `scripts/gen-contract.js` lists every `ApiError` code found in `src/` (a test keeps the file equal to its output); no route returns them until the central side is mounted. Known limit, unchanged: `verified_payment.payee_id` stays empty on this path, the same as the webhook path; the order carries the payee.
+
 ## 0.2.15 (prepared 2026-11-25; NOT deployed yet)
 
 Round 9 part A: two bugs in the money path of the payee webhook (`src/webhooks-in.js`). Dark behind `MNP_PAYEE_ACCOUNTS`, not deployed. Money flag unchanged (OFF). Part B (docs, test hygiene, contract) is listed below.
