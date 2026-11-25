@@ -2,7 +2,7 @@
 // Order of work: find the payee (unknown: 404 with no detail) -> check the signature with THAT payee's webhook secret on the raw body
 // -> event id seen before for this payee (repeat: 200 duplicate) -> find the order by the gateway order id
 // -> the ORDER SNAPSHOT's payee must be this payee, never whatever payee is routed now -> same code as railConfirm.
-// Permanent refusals are stored as 'ignored' (200). Transient ones (amount short, order not ready, unknown order inside the grace window) answer 409 and store nothing, so the retry is judged again.
+// Permanent refusals (currency mismatch, order already paid with another payment, wrong payee, ...) are stored as 'ignored' (200). Transient ones (amount short, order not ready, unknown order inside the grace window) answer 409 and store nothing, so the retry is judged again.
 // Events that do not apply (unknown order, other payee, other event type, mismatched amount) are stored as 'ignored' and answered 200,
 // so the gateway stops retrying. They are never applied. A paused or retired payee still accepts payments (money in means credits).
 // A draft payee accepts only test orders. Never a secret value or the raw body in an answer, an audit row or the event table.
@@ -29,6 +29,8 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
   const ctx = { ...ctx0, actor: 'gateway-webhook', callerType: 'payment', keyId: null }; // never the owner role
   await gate(ctx, undefined, true); // only the flag: money that is already paid must never wait on a setup check
   if (typeof raw !== 'string' || raw.length > MAX_RAW) throw new ApiError(413, 'too_large', 'Request is too large.');
+  // A missing or malformed signature (a sha256 hex is 64 characters) is refused here: no HMAC, no payee lookup, no database write.
+  if (!/^[0-9a-fA-F]{64}$/.test(String(headers?.get?.('x-razorpay-signature') || ''))) return done(401, { error: { code: 'webhook_bad_signature', message: 'Signature not accepted.' } });
   const row = await ctx.db.first('SELECT * FROM payee_account WHERE payee_id = ?', String(payeeId));
   if (!row) throw new ApiError(404, 'payee_not_found', 'No such payee.'); // same answer for any id: ids cannot be guessed
   const payee = view(row);
@@ -96,7 +98,9 @@ export async function receivePayeeWebhook(ctx0, payeeId, raw, headers, { adapter
       out = await railConfirm({ ...c, tenantId: own.tenant_id }, { order_id: own.id, payment_ref: n.payment_id, paid_minor: n.amount_minor, currency: n.currency });
     } catch (e) {
       if (!(e instanceof ApiError) || e.status >= 500) throw e;
-      throw new Refused(e.code, own); // undo any half-done credit work, then record the event as ignored in a fresh transaction
+      // currency mismatch is final; only a short amount can be fixed by a top-up. An order that is already paid is final.
+      const reason = e.code === 'payment_mismatch' && n.currency !== own.currency ? 'currency_mismatch' : e.code;
+      throw new Refused(reason, own); // undo any half-done credit work, then record the event as ignored in a fresh transaction
     }
     await keep('recorded', own.id);
     await chainRow(c, db, 'webhook.recorded', () => ({ payee_id: payee.payee_id, order_id: own.id }));

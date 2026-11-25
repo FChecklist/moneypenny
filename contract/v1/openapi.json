@@ -197,6 +197,10 @@
       "status": 409,
       "meaning": "That reference was already used."
     },
+    "forbidden": {
+      "status": 403,
+      "meaning": "Not allowed."
+    },
     "hold_already_captured": {
       "status": 409,
       "meaning": "This hold was already captured."
@@ -3147,8 +3151,12 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_json",
+          "forbidden",
           "payee_forbidden",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3191,13 +3199,17 @@
           "bad_currencies",
           "bad_field",
           "bad_gateway",
+          "bad_json",
           "bad_mode",
           "bad_secret_names",
           "bank_detail_refused",
+          "forbidden",
           "payee_exists",
           "payee_forbidden",
           "payee_setup_incomplete",
           "payees_disabled",
+          "rate_limited",
+          "replayed",
           "secret_value_refused"
         ],
         "parameters": [],
@@ -3240,9 +3252,14 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_json",
+          "forbidden",
+          "not_found",
           "payee_forbidden",
           "payee_not_found",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3282,6 +3299,8 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_json",
+          "forbidden",
           "identity_locked",
           "mode_fixed",
           "payee_forbidden",
@@ -3289,7 +3308,9 @@
           "payee_retired",
           "payee_secret_missing",
           "payee_setup_incomplete",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3331,13 +3352,17 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_json",
           "bad_transition",
+          "forbidden",
           "payee_forbidden",
           "payee_gateway_taken",
           "payee_not_found",
           "payee_secret_missing",
           "payee_setup_incomplete",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3379,9 +3404,13 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_json",
+          "forbidden",
           "payee_forbidden",
           "payee_not_found",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3423,9 +3452,13 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_json",
+          "forbidden",
           "payee_forbidden",
           "payee_not_found",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3468,12 +3501,16 @@
         "x-untrusted-fields": [],
         "x-error-codes": [
           "bad_field",
+          "bad_json",
           "bad_product",
+          "forbidden",
           "payee_forbidden",
           "payee_not_active",
           "payee_not_found",
           "payee_setup_incomplete",
           "payees_disabled",
+          "rate_limited",
+          "replayed",
           "route_overlap",
           "tenant_not_found"
         ],
@@ -3518,8 +3555,12 @@
         "x-untrusted-fields": [],
         "x-error-codes": [
           "bad_field",
+          "bad_json",
+          "forbidden",
           "payee_forbidden",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3561,8 +3602,12 @@
         "x-requires-idempotency-key": false,
         "x-untrusted-fields": [],
         "x-error-codes": [
+          "bad_json",
+          "forbidden",
           "payee_forbidden",
-          "payees_disabled"
+          "payees_disabled",
+          "rate_limited",
+          "replayed"
         ],
         "parameters": [],
         "responses": {
@@ -3590,7 +3635,7 @@
       "post": {
         "operationId": "payeeWebhook",
         "summary": "Gateway event for one payee",
-        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate. An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee.",
+        "description": "Signed by the gateway with that payee's webhook secret. A repeat answers duplicate. An event for an unknown order or another payee is stored as ignored. Credits are given once, against the order's own payee. Final refusals (wrong currency, order already paid with another payment) are stored once as ignored and answer 200. A short amount or an order not yet awaiting payment answers 409 with retry true and the event id is not stored, so the gateway retries. Too many bad calls in a minute answer 429.",
         "x-rw": "write",
         "x-money": true,
         "x-permission-level": "gateway",
@@ -3605,6 +3650,7 @@
           "payee_not_found",
           "payee_secret_missing",
           "payees_disabled",
+          "rate_limited",
           "too_large",
           "webhook_bad_signature",
           "webhook_no_event_id"

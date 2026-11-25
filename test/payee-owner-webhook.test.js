@@ -139,7 +139,7 @@ test('F6: flag off answers payees_disabled; read calls work even while setup is 
 // ---------------- F7 ----------------
 const evBody = (type, { order, pay = 'pay_W1', amount, currency = 'USD' }) => JSON.stringify({ event: type, payload: { payment: { entity: { id: pay, order_id: order, amount, currency } } } });
 async function hook(w, payeeId, x, raw, eventId, { sign = true } = {}) {
-  const sig = sign ? await hmacHex(WH(x), raw) : 'bad';
+  const sig = sign ? await hmacHex(WH(x), raw) : '0'.repeat(64); // wrong but well formed
   const r = await w.app.fetch(new Request(`http://t.local/v1/webhooks/payee/${payeeId}`, { method: 'POST', body: raw, headers: { 'x-razorpay-signature': sig, 'x-razorpay-event-id': eventId } }));
   return { status: r.status, body: await r.json() };
 }
@@ -354,4 +354,99 @@ test('R5-5: owner nonces older than the window are pruned and the owner key is r
   assert.ok(limited >= 10);
   w.s.clock.t += 60000; // next minute: allowed again
   assert.equal((await oc(w, 'GET', '/v1/owner/payees')).status, 200);
+});
+
+// ---------------- round 6 ----------------
+test('R6-1: nested transactions join the outer one; a failure in the outer rolls back the audit row too', async () => {
+  const w = await world();
+  const n0 = (await w.s.db.first('SELECT COUNT(*) n FROM payee_audit')).n;
+  const err = await w.s.db.tx(async (db) => {
+    await P.chainRow({ ...w.owner, db }, db, 'test.nested', () => ({ x: 1 }));
+    assert.equal((await db.first('SELECT COUNT(*) n FROM payee_audit')).n, n0 + 1); // visible inside the outer transaction
+    throw new Error('outer fails');
+  }).catch((e) => e);
+  assert.equal(err.message, 'outer fails');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM payee_audit')).n, n0); // the inner audit row was undone with it
+  await w.s.db.tx((db) => P.chainRow({ ...w.owner, db }, db, 'test.nested', () => ({ x: 2 })));
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM payee_audit')).n, n0 + 1); // and it commits with the outer one
+  assert.equal((await P.verifyPayeeAudit(w.owner)).ok, true);
+});
+
+test('R6-3: currency mismatch and an already paid order are final (200, stored once); underpay and not-yet-awaiting are 409 and not stored', async () => {
+  const w = await world();
+  const o = await order(w);
+  const cur = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor, currency: 'INR' }), 'c1');
+  assert.deepEqual([cur.status, cur.body.result], [200, 'currency_mismatch']);
+  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor, currency: 'INR' }), 'c1')).body.result, 'duplicate');
+  const under = await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor - 1 }), 'u1');
+  assert.deepEqual([under.status, under.body.result], [409, 'payment_mismatch']);
+  assert.equal((await w.s.db.all("SELECT 1 FROM payee_event WHERE event_id = 'u1'")).length, 0);
+  const o2 = await order(w);
+  await w.s.db.run("UPDATE purchase_order SET status = 'pending_rail' WHERE id = ?", o2.id);
+  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o2.rail_order_id, pay: 'pay_N', amount: o2.amount_minor }), 'n1')).status, 409);
+  assert.equal((await w.s.db.all("SELECT 1 FROM payee_event WHERE event_id = 'n1'")).length, 0);
+  // paid first, then another payment id for the same order: final
+  assert.equal((await hook(w, A, 'LEGACY', evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor }), 'p1')).body.result, 'recorded');
+  const again = evBody('payment.captured', { order: o.rail_order_id, pay: 'pay_OTHER', amount: o.amount_minor });
+  const paid = await hook(w, A, 'LEGACY', again, 'p2');
+  assert.deepEqual([paid.status, paid.body.result], [200, 'order_already_paid']);
+  assert.equal((await hook(w, A, 'LEGACY', again, 'p2')).body.result, 'duplicate');
+  assert.equal((await w.s.db.all("SELECT 1 FROM payee_event WHERE event_id = 'p2'")).length, 1);
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+});
+
+test('R6-4: two confirms for one order with different payment ids: the guarded update lets only one credit', async () => {
+  const w = await world();
+  const o = await order(w);
+  const stale = { ...o }; // what a concurrent reader saw before the other confirm committed
+  const { railConfirm } = await import('../src/gate.js');
+  const c = { ...w.owner, tenantId: o.tenant_id };
+  await railConfirm(c, { order_id: o.id, payment_ref: 'pay_one', paid_minor: o.amount_minor, currency: o.currency });
+  const db2 = new Proxy(w.s.db, { get: (t, k) => (k === 'first' ? async (sql, ...p) => (/FROM purchase_order WHERE tenant_id = \? AND id = \?/.test(sql) ? stale : t.first(sql, ...p)) : t[k]) });
+  assert.equal(await code(railConfirm({ ...c, db: db2 }, { order_id: o.id, payment_ref: 'pay_two', paid_minor: o.amount_minor, currency: o.currency })), 'order_already_paid');
+  assert.equal((await w.s.db.first('SELECT COUNT(*) n FROM entry')).n, 1);
+  assert.equal((await w.s.db.first('SELECT payment_ref FROM purchase_order WHERE id = ?', o.id)).payment_ref, 'pay_one');
+});
+
+test('R6-5: missing or malformed signature is 401 before any HMAC or write; unknown payee writes nothing', async () => {
+  const w = await world();
+  const o = await order(w);
+  const raw = evBody('payment.captured', { order: o.rail_order_id, amount: o.amount_minor });
+  const count = async () => JSON.stringify([(await w.s.db.first('SELECT COUNT(*) n FROM payee_audit')).n, (await w.s.db.first("SELECT COUNT(*) n FROM rate_limit WHERE key_id LIKE 'whbad:%'")).n, (await w.s.db.first('SELECT COUNT(*) n FROM payee_event')).n]);
+  const before = await count();
+  for (const hdr of [{}, { 'x-razorpay-signature': '' }, { 'x-razorpay-signature': 'zz' }, { 'x-razorpay-signature': 'a'.repeat(63) }]) {
+    const r = await w.app.fetch(new Request(`http://t.local/v1/webhooks/payee/${A}`, { method: 'POST', body: raw, headers: { ...hdr, 'x-razorpay-event-id': 'q1' } }));
+    assert.equal(r.status, 401);
+    assert.equal((await r.json()).error.code, 'webhook_bad_signature');
+  }
+  assert.equal(await count(), before);
+  assert.equal((await hook(w, 'pay_unknown', 'LEGACY', raw, 'q2')).status, 404);
+  assert.equal(await count(), before);
+});
+
+test('R6-6: owner ops list the refusal codes and the webhook entry documents 409 retry and 429', async () => {
+  const { OWNER_OPS, OPS } = await import('../src/contract.js');
+  for (const op of OWNER_OPS.filter((o) => o.level === 'owner')) for (const c of ['rate_limited', 'bad_json', 'replayed', 'forbidden']) assert.ok(op.errors.includes(c), `${op.id} lacks ${c}`);
+  assert.ok(OWNER_OPS.find((o) => o.id === 'ownerPayeeStep').errors.includes('bad_transition'));
+  assert.ok(OWNER_OPS.find((o) => o.id === 'ownerPayeeStep').errors.includes('payee_gateway_taken'));
+  assert.ok(OWNER_OPS.find((o) => o.id === 'ownerGetPayee').errors.includes('not_found'));
+  const wh = OWNER_OPS.find((o) => o.id === 'payeeWebhook') || OPS.find((o) => o.id === 'payeeWebhook');
+  assert.ok(wh.errors.includes('rate_limited'));
+  assert.match(wh.plain, /409/);
+  assert.match(wh.plain, /not stored/);
+  const { buildContract } = await import('../scripts/gen-contract.js');
+  const { readFileSync } = await import('node:fs');
+  assert.deepEqual(JSON.parse(readFileSync(new URL('../contract/v1/openapi.json', import.meta.url), 'utf8')), JSON.parse(JSON.stringify(buildContract())));
+});
+
+test('R6-2: a refused owner call has used its nonce; the same signed call again is replayed, a fresh nonce works', async () => {
+  const w = await world();
+  const path = '/v1/owner/payees/pay_nope';
+  const t = w.s.now(), nonce = 'refused-once';
+  const sig = await hmacHex(w.s.master, `mnp-owner\n${t}\n${nonce}\nGET\n${path}\n`);
+  const call = () => w.app.fetch(new Request(`http://t.local${path}`, { headers: { 'x-owner-ts': String(t), 'x-owner-nonce': nonce, 'x-owner-sig': sig } }));
+  assert.equal((await (await call()).json()).error.code, 'payee_not_found'); // refused after the nonce was taken
+  const again = await call();
+  assert.equal(again.status, 403);
+  assert.equal((await again.json()).error.code, 'replayed');
 });

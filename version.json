@@ -1,6 +1,6 @@
 {
   "product": "corporate-moneypenny",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "status": "prepared, not deployed",
   "deployedVersion": "0.1.0",
   "preparedAt": "2026-11-25T10:00:00Z",
@@ -10,6 +10,13 @@
   "commit": null,
   "commitNote": "Set releasedAt, releasedAtIST and commit to the deployed code SHA at deploy time, and change status to deployed.",
   "changes": [
+    {
+      "version": "0.2.12",
+      "status": "prepared, not deployed",
+      "preparedAt": "2026-11-25T12:00:00Z",
+      "releasedAt": null,
+      "notes": "Round 6 fixes for payee accounts: confirm takes one guarded UPDATE (status != paid) before any credit, so two concurrent payment ids credit once; webhook early 401 for a missing or malformed signature (no HMAC, no write); currency mismatch final, underpay transient; owner and webhook contract errors completed. Dark, nothing deployed, no flag changed."
+    },
     {
       "version": "0.2.11",
       "status": "prepared, not deployed",

@@ -2,6 +2,15 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
+## 0.2.12 (prepared 2026-11-25; NOT deployed yet)
+
+Round 6 fixes for payee accounts. Dark, not deployed. Money flag unchanged (OFF).
+
+- `railConfirm` now does one guarded `UPDATE ... WHERE status != 'paid'` before crediting; zero changed rows means already paid (same payment id: repeat answer; other id: `order_already_paid`). Two concurrent events with different payment ids credit once.
+- Webhook: a missing or malformed signature answers 401 before any HMAC, payee lookup or database write. Currency mismatch is a final refusal (200, stored once); an order already paid with another payment is final; a short amount and an order not yet awaiting payment stay 409 retry.
+- Contract: owner operations list `rate_limited`, `bad_json`, `replayed`, `forbidden` (and `not_found`, `bad_transition`, `payee_gateway_taken` where they apply); the webhook entry documents 409 retry and 429. `openapi.json` regenerated.
+- Tests: R6-1 to R6-6 in `test/payee-owner-webhook.test.js`; the F8 pending_rail test builds orders through `buyCredits`.
+
 ## 0.2.11 (prepared 2026-11-25; NOT deployed yet)
 
 Payee accounts F8 (health) and F9 (owner console screen). Dark behind `MNP_PAYEE_ACCOUNTS`. Money flag unchanged (OFF). No money behaviour changed.

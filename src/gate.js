@@ -212,6 +212,14 @@ export async function railConfirm(ctx, b) {
   const paid = int(b.paid_minor, 'paid_minor', { min: 1, max: 10000000000 });
   if (b.currency !== o.currency) throw new ApiError(422, 'payment_mismatch', 'The payment currency does not match the order.');
   if (paid < o.amount_minor) throw new ApiError(422, 'payment_mismatch', 'The payment is less than the order amount.');
+  // One guarded transition, taken BEFORE any credit is made: of two concurrent confirms for one order (different payment ids) only one changes a row.
+  // The other sees zero changed rows and is treated as already paid, so nothing is credited twice. Runs in the caller's transaction: a later refusal undoes it.
+  const won = await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ? AND status != 'paid'", payRef, paid, ctx.now(), o.id);
+  if (won.changes === 0) {
+    const now = await ctx.db.first('SELECT payment_ref, credits FROM purchase_order WHERE id = ?', o.id);
+    if (now?.payment_ref === payRef) return { order_id: o.id, status: 'paid', credited: now.credits, already: true };
+    throw new ApiError(409, 'order_already_paid', 'This order was already paid with another payment.');
+  }
   const acc = await ctx.db.first('SELECT email_norm FROM account WHERE id = ?', o.account_id);
   // Inside the lock window the order's own rate and credits apply. Later, an INR payment is re-priced at today's rate
   // (the money is in, so it is never refused); it can never buy more credits than the money is worth at that rate.
@@ -220,7 +228,6 @@ export async function railConfirm(ctx, b) {
   const repriced = late && o.currency === 'INR' && s.fx_state !== 'stale' && !o.fixed_price; // a fixed-price pack is never re-priced // with no usable rate the order's own terms apply
   const credits = repriced ? Math.max(1, creditsFromMinor(s, 'INR', paid)) : o.credits;
   const out = await creditPurchase(ctx, { email: acc.email_norm, amount: credits, paid_minor: repriced ? paid : Math.min(paid, o.amount_minor), currency: o.currency, payment_ref: payRef }, repriced ? {} : { lock: { rateCpu: o.rate_cpu, rateInr: o.rate_inr }, fixedPrice: !!o.fixed_price }); // the order check above already proved paid >= the fixed price
-  await ctx.db.run("UPDATE purchase_order SET status = 'paid', payment_ref = ?, paid_minor = ?, updated_at = ? WHERE id = ?", payRef, paid, ctx.now(), o.id);
   if (o.payee_id) await ctx.db.run('UPDATE verified_payment SET payee_id = ? WHERE tenant_id = ? AND ref = ? AND payee_id IS NULL', o.payee_id, ctx.tenantId, payRef); // the order's own payee, never today's route
   // More money than the order asked for: credits are given for the order only. The extra is flagged so the payment side can refund it.
   const overpaid = !repriced && paid > o.amount_minor ? paid - o.amount_minor : 0;
