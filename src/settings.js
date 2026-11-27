@@ -15,7 +15,7 @@ export const SCHEMA = {
   base_currency: { type: 'cur', def: 'INR', doc: 'Currency a person pays in by default (INR or USD; nothing else can be paid in).' },
   display_currency: { type: 'curnull', def: null, doc: 'Optional third currency shown next to prices for information only (for example EUR). Never charged.' },
   fx_margin_bps: { type: 'int', def: 500, min: 0, max: 2000, doc: 'Margin added to the daily INR rate for this tenant, in basis points (500 = 5%).' },
-  fx_max_age_hours: { type: 'int', def: 72, min: 1, max: 720, doc: 'How old the last good exchange rate may be before new INR orders are paused.' },
+  fx_max_age_hours: { type: 'int', def: 24, min: 1, max: 720, doc: 'How old the last good exchange rate may be before new INR orders are paused.' },
   inr_packs: { type: 'packs', def: {}, doc: 'Fixed INR list price per credit pack, as {"credits": paise}, for example {"3400": 239900}. A pack is charged exactly this: no margin and no daily-rate change. Other sizes still use the daily rate.' },
   inr_round_to_rupee: { type: 'bool', def: 1, doc: 'Round INR prices for credit orders up to a whole rupee.' },
   buy_min_credits: { type: 'int', def: 100, min: 1, max: 100000000, doc: 'Smallest credit order (100 = US$1).' },
@@ -80,6 +80,7 @@ export async function getSettings(ctx) {
   const fx = await currentRate(ctx, 'INR', out.fx_max_age_hours);
   out.fx_state = fx.state;
   out.fx_as_of = fx.as_of ?? null;
+  out.fx_source = fx.row ? fx.row.source : null;
   if (fx.state !== 'none') {
     const paise = Math.round((fx.row.rate_x10000 / 100) * (10000 + out.fx_margin_bps) / 10000);
     out.inr_paise_raw = Math.round(fx.row.rate_x10000 / 100); // the rate before our margin: payouts to people use this

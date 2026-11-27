@@ -8,7 +8,7 @@ import { getSettings } from '../src/settings.js';
 const src = (rates, name = 'test') => ({ name, async fetch() { return { rates }; } });
 const failing = { name: 'broken', async fetch() { throw new Error('network down'); } };
 const DAY0 = utcDayStart(T0); // 00:00 UTC of the test day
-const inr = (s) => currentRate(s.ctx(), 'INR', 72);
+const inr = (s) => currentRate(s.ctx(), 'INR', 24);
 
 test('rate is fixed for the UTC day: a second fetch changes nothing', async () => {
   const s = await setup();
@@ -118,7 +118,7 @@ test('missing, zero, negative or non-numeric rates are rejected: last good rate 
   s.clock.t = next;
   const cur = await inr(s);
   assert.equal(cur.units_per_usd, 70); // yesterday's rate is kept
-  assert.equal(cur.state, 'fallback');
+  assert.equal(cur.state, 'stale'); // but it is now older than the 24 h limit
 });
 
 test('failed fetch: last good rate stays, an alert is raised, old rate becomes stale and pauses new INR orders (USD still works)', async () => {
@@ -129,9 +129,8 @@ test('failed fetch: last good rate stays, an alert is raised, old rate becomes s
   assert.equal(f.ok, false);
   assert.ok(await s.db.first("SELECT 1 x FROM outbox WHERE type = 'fx.fetch_failed'"));
   s.clock.t = DAY0 + DAY + 2 * 3600000;
-  assert.equal((await inr(s)).state, 'fallback');
-  assert.equal((await s.api.post('/v1/buy_credits', { email: 'a@x.com', credits: 1000, currency: 'INR', order_ref: 'f1' })).status, 200);
-  s.clock.t = DAY0 + 4 * DAY; // far past the 72 hour limit
+  assert.equal((await inr(s)).state, 'stale'); // rate fetched at 00:00 is 26 h old: past the 24 h limit
+  s.clock.t = DAY0 + 4 * DAY;
   assert.equal((await inr(s)).state, 'stale');
   const blocked = await s.api.post('/v1/buy_credits', { email: 'a@x.com', credits: 1000, currency: 'INR', order_ref: 'f2' });
   assert.equal(blocked.status, 503);

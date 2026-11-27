@@ -7,6 +7,7 @@ import { getSettings, minorFromCredits, creditsFromMinor, fmtUsd, fmtCredits, di
 import { findAccount, ensureAccount } from './accounts.js';
 import { creditPurchase, payId } from './wallet.js';
 import { displayRate, currentRate } from './fx.js';
+import { RATE_ATTRIBUTION } from './fx-sources.js';
 import { audit } from './audit.js';
 import { emit } from './outbox.js';
 
@@ -53,6 +54,19 @@ export function priceMinor(s, cur, credits) {
   return cur === 'INR' ? roundInr(s, raw) : raw;
 }
 
+/** Fields every price answer carries: where the rate came from, how long an order keeps it. Attribution only for a real source. */
+export const PRICE_NOTE_EN = 'Price held for 2 hours. After that, credits may differ.';
+const REAL_SOURCES = ['er-api', 'fawaz'];
+export function rateFields(s) {
+  return {
+    rate_source: s.fx_source ?? null,
+    rate_as_of: s.fx_as_of ? new Date(s.fx_as_of).toISOString() : null,
+    ...(REAL_SOURCES.includes(s.fx_source) ? { rate_attribution: RATE_ATTRIBUTION } : {}),
+    rate_lock_minutes: s.rate_lock_minutes,
+    price_note_en: PRICE_NOTE_EN,
+  };
+}
+
 /** Credits, US$, the payment currencies and an optional display-only local figure, with the "rate as of" stamp. */
 export async function quote(ctx, credits, currency = null) {
   const s = await getSettings(ctx);
@@ -68,7 +82,7 @@ export async function quote(ctx, credits, currency = null) {
     pay_in: ['INR', 'USD'],
     base_currency: s.base_currency,
     rate_state: s.fx_state, // fresh, fallback, stale, or none (hand-set rate)
-    rate_as_of: s.fx_as_of ? new Date(s.fx_as_of).toISOString() : null,
+    ...rateFields(s),
     inr_paise_per_usd: s.fx_state === 'stale' ? null : s.inr_paise_per_usd,
   };
   if (currency && currency !== 'INR' && currency !== 'USD') {
@@ -92,6 +106,7 @@ export async function buyCredits(ctx, b) {
   const cur = b.currency ?? s.base_currency;
   if (cur !== 'INR' && cur !== 'USD') throw new ApiError(400, 'bad_currency', 'Payment is in INR or USD only.');
   const fixed = cur === 'INR' && packPrice(s, credits) != null;
+  if (cur === 'INR' && s.fx_source === 'stub' && !ctx.allowStubRate) throw new ApiError(503, 'rate_source_not_configured', 'Paying in INR is not switched on yet: no real exchange-rate source is set up. Pay in USD for now.');
   if (cur === 'INR' && !fixed && s.fx_state === 'stale') throw new ApiError(503, 'rate_stale', 'The exchange rate is out of date. Try again shortly or pay in USD.');
   const amount = priceMinor(s, cur, credits);
 
@@ -101,7 +116,7 @@ export async function buyCredits(ctx, b) {
     if (!acc || acc.id !== prior.account_id || prior.credits !== credits || prior.currency !== cur) throw new ApiError(409, 'order_ref_used', 'That order reference was used for a different order.');
     // An unpaid pack order made at an old pack price is not handed out again after the price changed: use a new order reference.
     if (prior.fixed_price && ['pending_rail', 'awaiting_payment'].includes(prior.status) && prior.amount_minor !== amount) throw new ApiError(409, 'price_changed', 'The pack price has changed. Start a new order.', { amount_minor: amount });
-    return orderView(prior);
+    return orderView(prior, s);
   }
   if (!ctx.rail || ctx.rail.name === 'not_configured') throw new ApiError(503, 'rail_not_configured', 'Buying credits is not switched on yet.');
   const known = await findAccount(ctx, b.email);
@@ -115,12 +130,13 @@ export async function buyCredits(ctx, b) {
   );
   await ctx.db.run('INSERT INTO rail_outbox (id, tenant_id, order_id, next_at, created_at) VALUES (?,?,?,?,?)', newId('rob'), ctx.tenantId, id, now, now);
   await processRail(ctx, ctx.rail, { orderId: id });
-  return orderView(await ctx.db.first('SELECT * FROM purchase_order WHERE id = ?', id));
+  return orderView(await ctx.db.first('SELECT * FROM purchase_order WHERE id = ?', id), s);
 }
 
-const orderView = (o) => ({
+const orderView = (o, s) => ({
   order_id: o.id, order_ref: o.order_ref, status: o.status, credits: o.credits, currency: o.currency, amount_minor: o.amount_minor, fixed_price: !!o.fixed_price,
   pay_url: o.pay_url ?? null, rail_order_id: o.rail_order_id ?? null,
+  ...rateFields(s),
 });
 
 /** Sends waiting orders to the rail. A failure waits (back-off) and tries again; after too many tries it is a dead letter. */
