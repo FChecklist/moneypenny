@@ -51,3 +51,6 @@ Rail call inside the transaction in `buy_credits`; no cron or webhook sender; fi
 
 ## Change after the audited deploy (19 Nov 2026, NOT deployed)
 F1 fix: setting `inr_packs` gives a listed INR pack a fixed price (no margin, no daily-rate change); `purchase_order.fixed_price` (migration 0004) stops a late payment being re-priced. Code differs from the audited 65b86c8: needs two fresh independent PASSes before any redeploy.
+
+## Step 2 (27 Nov 2026, v0.2.0, NOT deployed, local commit on branch feat/price-block-fx-2026-11-27)
+Real FX sources (er-api, fawaz fallback) in src/fx-sources.js, fx_max_age_hours 24 (migration 0005), INR refused on a stub rate (503 rate_source_not_configured), quote and buy_credits carry rate_source / rate_as_of / rate_attribution / rate_lock_minutes / price_note_en. Not built: a scheduled job that calls refreshRates in the Worker.
