@@ -6,6 +6,8 @@ The currency name, unit word and symbol are tenant settings (default name "Money
 **Status:** local build. Not deployed. No payments, no cash-out, no real accounts.
 The public name is one setting (`product_name`). The code name is MNP.
 
+Version history: see [CHANGELOG.md](CHANGELOG.md).
+
 ## What it does, in plain words
 
 - **One balance, three piles underneath.** *Bought* (paid for with real money), *bonus* (free, small, capped), *commission* (earned from real paid sales). The piles never merge, so bought credit can never become cash.
