@@ -15,5 +15,9 @@ export const MIGRATIONS = [
   [
     "0004_fixed_pack_price.sql",
     "-- An order for a listed INR pack keeps its fixed list price: it is never re-priced at a later exchange rate.\nALTER TABLE purchase_order ADD COLUMN fixed_price INTEGER NOT NULL DEFAULT 0;\n"
+  ],
+  [
+    "0005_fx_max_age_24h.sql",
+    "-- The exchange rate may be at most 24 hours old (was 72). A tenant that still holds the old default is moved; any other value is kept.\nUPDATE tenant_setting SET value = '24' WHERE key = 'fx_max_age_hours' AND value = '72';\n"
   ]
 ];

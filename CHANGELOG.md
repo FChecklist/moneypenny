@@ -1,10 +1,17 @@
 # Changelog
 
-Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
+Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number `package.json` carried until 0.2.0 was started) and is listed below as dated milestones taken from git history.
 
-## Not yet deployed (in the repo, not live)
+## 0.2.0 - 2026-11-27 (Moneypenny step 2, not deployed)
+- Real exchange-rate sources: Exchange Rate API (`er-api`) with the fawaz currency API (`fawaz`) as fallback (`src/fx-sources.js`). The source name is stored in `fx_rate.source`. `RATE_ATTRIBUTION` text exported. Sanity band and the 50% move guard unchanged.
+- `fx_max_age_hours` default 24 (was 72). Migration 0005 moves tenants that still hold 72 to 24; other values are kept.
+- INR orders (`buy_credits`) are refused with 503 `rate_source_not_configured` while the active rate came from the stub. USD unaffected. Tests can allow the stub with `createApp({ allowStubRate: true })`.
+- `GET /v1/quote` and `buy_credits` answers add `rate_source`, `rate_as_of`, `rate_attribution` (real source only), `rate_lock_minutes`, `price_note_en`. No existing field renamed.
+- `scripts/fx.js refresh` uses the real chain (set `MNP_FX_SOURCE=stub` for the offline stub).
 
-These changes are after the deployed code (65b86c8). They need fresh independent audit passes before a deploy, and a version bump (see KNOWLEDGE.md) when they go live.
+## Also not deployed, before 0.2.0 (no separate version number)
+
+These changes came after the deployed code (65b86c8) and are part of what goes live with 0.2.0. They need fresh independent audit passes before a deploy, and the version files updated (see KNOWLEDGE.md) when they go live.
 
 - 20 Nov 2026, 00:11: Console wallet: the failure count restarts after each successful step.
 - 20 Nov 2026, 00:06 to 00:08: Console wallet: any unfinished order reaches the owner after 2 hours; a reopened click restarts its clock.
