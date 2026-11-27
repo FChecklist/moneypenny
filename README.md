@@ -3,8 +3,10 @@
 A small ledger that keeps **Moneypenny** for people: what they have, what they spent, what they earned.
 The currency name, unit word and symbol are tenant settings (default name "Moneypenny", label "moneypenny", symbol = the built-in coin icon). 100 credits = US$1 (also a setting). One balance on screen. Phase 0: runs on this laptop only. Nothing is live.
 
-**Status:** local build. Not deployed. No payments, no cash-out, no real accounts.
+**Status:** live as a dark Worker (0.1.0, no payment side, no money flowing). 0.3.0 is prepared and not deployed. No cash-out, no real accounts. Going live: see [docs/GO-LIVE.md](docs/GO-LIVE.md).
 The public name is one setting (`product_name`). The code name is MNP.
+
+Version history: see [CHANGELOG.md](CHANGELOG.md). Going live: [docs/GO-LIVE.md](docs/GO-LIVE.md).
 
 ## What it does, in plain words
 
@@ -27,6 +29,7 @@ The public name is one setting (`product_name`). The code name is MNP.
 npm test          # runs all tests in memory, a few seconds
 npm run seed      # makes .data/dev.sqlite and a 'demo' tenant; prints keys once
 npm run reconcile # credits still owed, by bucket and tenant
+npm run guards    # removes each safety rule one at a time and checks a test fails (about 2 minutes)
 npm run dev       # then open http://localhost:8787/admin and paste the admin key
 ```
 
@@ -75,7 +78,7 @@ The payment side calls `POST /v1/payment_notice` (purchase key) with the payment
 then capture the cash part of an order, or earn a commission, only against a payment noted there (or one that bought
 credits). Payment ids are compared without regard to letter case.
 
-**Off-switch and deploy settings.** The Worker reads the Hub's status file (`MNP_STATUS_URL`) and keeps the last good answer, also across restarts. If it has never been read, every change is refused (looking still works). `MNP_STATUS_OPTIONAL=1` runs without a global switch, on purpose. The Hub answer must name a mode; an answer older than 6 hours counts as unknown. The deployed Worker has no payment side yet: `buy_credits` and payouts refuse (the stub is never used there). It also has no rate source: INR is refused everywhere until the owner puts a rate in with the signed `POST /v1/setup` call (`set_rate`); the same call (`create_tenant`) makes the first tenant and its keys once. Both are signed with the master secret and a time stamp (the master secret must be 32+ characters). A chargeback of commission that was already spent records a debt on the sale but does not collect it from the earner; bought credits already spent are not recovered either (the account is frozen). A flood of unsigned requests still queues on the single writer: put Cloudflare rate limiting in front. The margin on a USD-bought credit spent on an INR-priced order favours the spender by the margin (5% by default); this is the owner's choice to keep or change.
+**Off-switch and deploy settings.** The Worker reads the Hub's status file (`MNP_STATUS_URL`) and keeps the last good answer, also across restarts. If it has never been read, every change is refused (looking still works). `MNP_STATUS_OPTIONAL=1` runs without a global switch, on purpose. The Hub answer must name a mode; an answer older than 6 hours counts as unknown. The deployed Worker has no payment side yet: `buy_credits` and payouts refuse (the stub is never used there). It also has no rate source: INR is refused everywhere until the owner puts a rate in with the signed `POST /v1/setup` call (`set_rate`); the same call (`create_tenant`) makes the first tenant and its keys once. Both are signed with the master secret and a time stamp (the master secret must be 32+ characters). A chargeback of commission that was already spent records a debt on the sale but does not collect it from the earner; bought credits already spent are not recovered either (the account is frozen). A forged or unsigned request is refused before it reaches the single writer, and a real key has its own per-minute limit; Cloudflare rate limiting in front is still a good idea for a flood of correctly signed calls. The margin on a USD-bought credit spent on an INR-priced order favours the spender by the margin (5% by default); this is the owner's choice to keep or change.
 
 **Known limits (found by audit 4, left for a later phase):** a rail call (up to 4 s) runs inside the one-at-a-time
 transaction in `buy_credits`, so a very slow rail slows everyone: move it after the commit with the outbox before real traffic.

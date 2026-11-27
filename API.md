@@ -11,13 +11,14 @@ Headers: `x-mnp-key`, `x-mnp-timestamp` (milliseconds), `x-mnp-nonce` (new every
 signature = hex( HMAC-SHA256( secret, [timestamp, nonce, METHOD, pathWithQuery, sha256hex(body), idempotencyKeyOrEmpty].join("\n") ) )
 ```
 
+- A call with missing or wrong signature headers is refused (401) before it reaches the database queue and does not count against any key's rate limit.
 - The timestamp must be within 5 minutes. A nonce works once per key (a replay gets 401).
 - The secret is shown once when a key is made. It is derived from the master secret, so no secret sits in the database.
 - Five key types, least power each (the fifth, `ai_read`, is read-only plus `POST /v1/ai/ask`, which only makes a request a person must approve): `read` (balance only), `api` (a product's server: spend, events, hand-given bonus, order returns), `purchase` (the payment system: credit bought, money refunds, chargebacks) and `admin`. A key cannot use another type's routes.
 - Every POST/PUT/DELETE also needs `Idempotency-Key` (up to 120 characters); for `credit_purchase` the payment id is used when the header is left out. Same key and same request returns the first answer (`idempotent-replay: true`). Same key and a different request gives 409. A failed call leaves no trace, so its key can be reused.
 - Callers must send only **verified** e-mail addresses. Identity is the lower-cased e-mail.
 
-`GET /health` (open): `ok, db, rail{name,ok}, fx{state,as_of}; nothing about any tenant`. No tenant data.
+`GET /health` (open): `ok, db, rail{ok}, fx{state,as_of}; nothing about any tenant`. No tenant data. The payment side is asked at most once every 30 seconds, so the state of `rail` can be up to 30 seconds old.
 Idempotency keys starting `pay:` are reserved for the payment routes and must be `pay:<payment_ref>` or `pay:<route>:<payment_ref>`.
 
 ## Money units

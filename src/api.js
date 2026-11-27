@@ -1,6 +1,6 @@
 // The whole HTTP surface. Standard Request/Response so it runs in a Worker, Node or tests alike.
-import { ApiError, sha256Hex, hmacHex, safeEqual } from './util.js';
-import { authenticate, createApiKey } from './auth.js';
+import { ApiError, sha256Hex, hmacHex, safeEqual, redact } from './util.js';
+import { authenticate, createApiKey, precheckSignature } from './auth.js';
 import { getSettings, DEFAULTS } from './settings.js';
 import { getBalance, creditPurchase, paymentNotice, creditManualBonus, processEvent, history } from './wallet.js';
 import { reserve, reserveItem, capture, release, refund, sweepHolds } from './spend.js';
@@ -143,6 +143,9 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
         route = [method, url.pathname, ['admin'], true, (c, b) => decide(c, m[1], m[2])];
       }
 
+      // 0) a forged or unsigned call is refused before it can queue on the single writer
+      await precheckSignature(master, request.headers, method, pathQuery, raw);
+
       // 1) who is calling (own transaction so nonce and rate counters survive a later failure)
       const auth = await db.tx((t) =>
         authenticate({ db: t, now, master }, request.headers, method, pathQuery, raw, async (tenantId, scope) => {
@@ -210,7 +213,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
       return new Response(out.text, { status: out.status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...(out.replay ? { 'idempotent-replay': 'true' } : {}) } });
     } catch (e) {
       if (e instanceof ApiError) return json(e.status, { ok: false, error: { code: e.code, message: e.message, ...e.extra } });
-      console.error('internal error', e && e.message);
+      console.error('internal error', redact(e && e.message)); // never the stack, the request, headers or any value that looks like an e-mail or a secret
       return json(500, { ok: false, error: { code: 'internal', message: 'Something went wrong on our side. Nothing was changed.' } });
     }
   }
@@ -268,6 +271,7 @@ ${raw}`))) return fail();
     return json(out.status, out.body);
   }
 
+  let railSeen = null;
   async function healthReport() {
     // Open to anyone, so: whether the parts work, and nothing about any tenant (no counts, no names).
     const out = { ok: true, db: false, rail: { ok: false }, fx: null };
@@ -275,7 +279,9 @@ ${raw}`))) return fail();
       await db.first('SELECT 1 x');
       out.db = true;
       const c = { db, now, tenantId: null, rail: app.rail };
-      out.rail = { ok: (await railHealth(c)).ok };
+      // the rail is asked at most once every 30 seconds: this route is open to anyone, so it must not be a way to hammer IT Services
+      if (!railSeen || railSeen.rail !== app.rail || now() - railSeen.at >= 30000) railSeen = { at: now(), rail: app.rail, ok: railHealth(c).then((h) => h.ok) };
+      out.rail = { ok: await railSeen.ok };
       const r = await currentRate(c, 'INR', DEFAULTS.fx_max_age_hours);
       out.fx = { state: r.state, as_of: r.as_of ? new Date(r.as_of).toISOString() : null };
       out.ok = out.rail.ok && r.state !== 'stale';

@@ -33,7 +33,7 @@
 A second independent PASS on the exact final code is still needed before reporting done.
 
 ## What is deployed
-LIVE (19 Nov 2026): https://moneypenny.corporatetambola.com, Worker `moneypenny`, SQLite Durable Object, code 65b86c8. Public repo FChecklist/moneypenny. Rollback ids: previous version 8f26e747-dfa9-4251-928f-5fa17f1701e5 (no secret); current 5d8ac727-536d-4174-9fa3-52fe6dd96b06 (adds MNP_MASTER_SECRET). Master secret and tenant keys are in C:/Users/Dell/.moneypenny (outside the repo). Live smoke passed incl. rollback on a throw on the real runtime; one test purchase (1000 test credits, smoke@example.com) is in the live ledger. Purchase and AI keys were revoked after the smoke: issue new ones with the signed setup call when the payment side exists. INR is refused until an owner sets a rate. MNP_STATUS_OPTIONAL=1 is on until the Hub status URL is set.
+LIVE (19 Nov 2026): https://moneypenny.corporatetambola.com, Worker `moneypenny`, SQLite Durable Object, code 65b86c8. Public repo FChecklist/moneypenny. Rollback ids: previous version 8f26e747-dfa9-4251-928f-5fa17f1701e5 (no secret); current 5d8ac727-536d-4174-9fa3-52fe6dd96b06 (adds MNP_MASTER_SECRET). Master secret and tenant keys are kept outside the repo (owner's machine). Live smoke passed incl. rollback on a throw on the real runtime; one test purchase (1000 test credits, smoke@example.com) is in the live ledger. Purchase and AI keys were revoked after the smoke: issue new ones with the signed setup call when the payment side exists. INR is refused until an owner sets a rate. MNP_STATUS_OPTIONAL=1 is on until the Hub status URL is set.
 
 ## What waits on whom
 - Steps 4-8 (public repo FChecklist/moneypenny after a secret scan, push, Cloudflare deploy, DNS Moneypenny.corporatetambola.com, live smoke, register code MNP) wait for the owner to confirm directly in the Moneypenny session. Relayed quotes through BOSS were not accepted as that confirmation.
@@ -51,6 +51,9 @@ Rail call inside the transaction in `buy_credits`; no cron or webhook sender; fi
 
 ## Change after the audited deploy (19 Nov 2026, NOT deployed)
 F1 fix: setting `inr_packs` gives a listed INR pack a fixed price (no margin, no daily-rate change); `purchase_order.fixed_price` (migration 0004) stops a late payment being re-priced. Code differs from the audited 65b86c8: needs two fresh independent PASSes before any redeploy.
+
+## 21 Nov 2026: go-live plan written (NOT deployed)
+`docs/GO-LIVE.md` has the ordered steps, secret names, the owner's own Rs 1 test, the two flags (`PAY_VIA_MONEYPENNY`, `PAY_VIA_CONSOLE`), and rollback. One rule: no customer can reach payment until D3 items 1 to 10 and D4 pass on the same run; during D1 to D3 the flags are ON only behind the audited owner-only gate. Version 0.2.2 prepared after failed audits of 0.2.0 and 0.2.1 (see CHANGELOG.md). Blocked on: the IT Services adapter and Pages/D1 side, the console permanent store, an owner-only gate for the test. Moneypenny Chat does not exist in this repo.
 
 ## Step 2 (27 Nov 2026, v0.2.0, NOT deployed, local commit on branch feat/price-block-fx-2026-11-27)
 Real FX sources (er-api, fawaz fallback) in src/fx-sources.js, fx_max_age_hours 24 (migration 0005), INR refused on a stub rate (503 rate_source_not_configured), quote and buy_credits carry rate_source / rate_as_of / rate_attribution / rate_lock_minutes / price_note_en. Not built: a scheduled job that calls refreshRates in the Worker.

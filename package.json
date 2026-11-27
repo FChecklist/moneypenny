@@ -1,6 +1,6 @@
 {
   "name": "corporate-moneypenny",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Corporate Moneypenny (MNP): a closed-loop credit ledger. Phase 0, local only.",
@@ -12,7 +12,8 @@
     "reconcile": "node scripts/reconcile.js",
     "scan": "node scripts/scan-words.js",
     "rules-doc": "node scripts/gen-rules.js",
-    "fx": "node scripts/fx.js"
+    "fx": "node scripts/fx.js",
+    "guards": "node scripts/guard-check.js"
   },
   "engines": { "node": ">=22.5" }
 }
