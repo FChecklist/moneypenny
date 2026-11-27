@@ -324,6 +324,10 @@
       "status": 409,
       "meaning": "Credits per US$1 cannot change once credits exist."
     },
+    "rate_source_not_configured": {
+      "status": 503,
+      "meaning": "Paying in INR is not switched on yet: no real exchange-rate source is set up. Pay in USD for now."
+    },
     "rate_stale": {
       "status": 503,
       "meaning": "The exchange rate is out of date. Try again shortly."
@@ -621,6 +625,10 @@
                   "base_currency": "INR",
                   "rate_state": "fresh",
                   "rate_as_of": "2026-11-17T00:00:00.000Z",
+                  "rate_source": "er-api",
+                  "rate_attribution": "Rates by Exchange Rate API, https://www.exchangerate-api.com",
+                  "rate_lock_minutes": 120,
+                  "price_note_en": "Price held for 2 hours. After that, credits may differ.",
                   "inr_paise_per_usd": 7350,
                   "local": {
                     "currency": "EUR",
@@ -1470,7 +1478,12 @@
                   "currency": "INR",
                   "amount_minor": 147000,
                   "pay_url": "https://pay.invalid/stub/ord_...",
-                  "rail_order_id": "STUB-ORD-ord_..."
+                  "rail_order_id": "STUB-ORD-ord_...",
+                  "rate_source": "er-api",
+                  "rate_as_of": "2026-11-17T00:00:00.000Z",
+                  "rate_attribution": "Rates by Exchange Rate API, https://www.exchangerate-api.com",
+                  "rate_lock_minutes": 120,
+                  "price_note_en": "Price held for 2 hours. After that, credits may differ."
                 }
               }
             }

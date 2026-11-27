@@ -1,7 +1,7 @@
 // The whole HTTP surface. Standard Request/Response so it runs in a Worker, Node or tests alike.
 import { ApiError, sha256Hex, hmacHex, safeEqual, redact } from './util.js';
 import { authenticate, createApiKey, precheckSignature } from './auth.js';
-import { getSettings } from './settings.js';
+import { getSettings, DEFAULTS } from './settings.js';
 import { getBalance, creditPurchase, paymentNotice, creditManualBonus, processEvent, history } from './wallet.js';
 import { reserve, reserveItem, capture, release, refund, sweepHolds } from './spend.js';
 import { buyCredits, railConfirm, quote, setCatalogue, listCatalogue, listDeadLetters, requeueDeadLetter, processRail, railHealth, fxHealth } from './gate.js';
@@ -114,7 +114,7 @@ async function creditBonus(c, b) {
 const json = (status, obj, extra = {}) =>
   new Response(JSON.stringify(obj), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra } });
 
-export function createApp({ db, master, now = Date.now, rail = stubRail, status = null, aiWithoutStatus = false, requireRate = false }) {
+export function createApp({ db, master, now = Date.now, rail = stubRail, status = null, aiWithoutStatus = false, requireRate = false, allowStubRate = false }) {
   if (!master || master.length < 32) throw new Error('MNP_MASTER_SECRET is required (32+ characters).');
 
   async function fetch(request) {
@@ -183,7 +183,7 @@ export function createApp({ db, master, now = Date.now, rail = stubRail, status 
 
       // 2) the work, all or nothing
       const out = await db.tx(async (t) => {
-        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, requireRate: app.requireRate, opAllowed: app.status ? async (id) => checkStatus(await app.status().catch(() => null), { op: { id }, method: 'POST', scope: 'admin' }) : null, cache: app.cache, scope: auth.scope, actor: auth.keyId, keyId: auth.keyId, callerType: CALLER[auth.scope], idem: idem || null, _settings: null };
+        const ctx = { db: t, tenantId: auth.tenantId, now, master, rail: app.rail, requireRate: app.requireRate, allowStubRate: app.allowStubRate, opAllowed: app.status ? async (id) => checkStatus(await app.status().catch(() => null), { op: { id }, method: 'POST', scope: 'admin' }) : null, cache: app.cache, scope: auth.scope, actor: auth.keyId, keyId: auth.keyId, callerType: CALLER[auth.scope], idem: idem || null, _settings: null };
         const set = await getSettings(ctx);
         if (set.kill_switch && auth.scope !== 'admin') throw new ApiError(503, 'paused', 'This service is switched off for now.');
         if (auth.scope === 'ai_read' && !set.ai_enabled) throw new ApiError(403, 'ai_off', 'AI access is switched off for this tenant.');
@@ -282,7 +282,7 @@ ${raw}`))) return fail();
       // the rail is asked at most once every 30 seconds: this route is open to anyone, so it must not be a way to hammer IT Services
       if (!railSeen || railSeen.rail !== app.rail || now() - railSeen.at >= 30000) railSeen = { at: now(), rail: app.rail, ok: railHealth(c).then((h) => h.ok) };
       out.rail = { ok: await railSeen.ok };
-      const r = await currentRate(c, 'INR', 72);
+      const r = await currentRate(c, 'INR', DEFAULTS.fx_max_age_hours);
       out.fx = { state: r.state, as_of: r.as_of ? new Date(r.as_of).toISOString() : null };
       out.ok = out.rail.ok && r.state !== 'stale';
     } catch {
@@ -291,6 +291,6 @@ ${raw}`))) return fail();
     return json(out.db ? 200 : 503, out);
   }
 
-  const app = { fetch, db, master, now, rail, status, requireRate, cache: new Map() };
+  const app = { fetch, db, master, now, rail, status, requireRate, allowStubRate, cache: new Map() };
   return app;
 }

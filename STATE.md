@@ -54,3 +54,6 @@ F1 fix: setting `inr_packs` gives a listed INR pack a fixed price (no margin, no
 
 ## 21 Nov 2026: go-live plan written (NOT deployed)
 `docs/GO-LIVE.md` has the ordered steps, secret names, the owner's own Rs 1 test, the two flags (`PAY_VIA_MONEYPENNY`, `PAY_VIA_CONSOLE`), and rollback. One rule: no customer can reach payment until D3 items 1 to 10 and D4 pass on the same run; during D1 to D3 the flags are ON only behind the audited owner-only gate. Version 0.2.2 prepared after failed audits of 0.2.0 and 0.2.1 (see CHANGELOG.md). Blocked on: the IT Services adapter and Pages/D1 side, the console permanent store, an owner-only gate for the test. Moneypenny Chat does not exist in this repo.
+
+## Step 2 (27 Nov 2026, v0.2.0, NOT deployed, local commit on branch feat/price-block-fx-2026-11-27)
+Real FX sources (er-api, fawaz fallback) in src/fx-sources.js, fx_max_age_hours 24 (migration 0005), INR refused on a stub rate (503 rate_source_not_configured), quote and buy_credits carry rate_source / rate_as_of / rate_attribution / rate_lock_minutes / price_note_en. Not built: a scheduled job that calls refreshRates in the Worker.

@@ -25,7 +25,7 @@ async function alertAll(db, now, type, payload) {
  * not a market move) is rejected: the last good rate is kept and an alert is raised. A failed fetch does the same.
  * A person can fix a bad day with overrideRate().
  */
-const BAND = { INR: [10, 500] }; // units per US$: a technical sanity range, far wider than any real move
+export const BAND = { INR: [10, 500] }; // units per US$: a technical sanity range, far wider than any real move
 export const MAX_MOVE_PCT = 50; // one day's move beyond this is a bad feed (an inverted or mis-scaled number), not a market move
 
 export async function refreshRates(db, source, now) {
@@ -63,11 +63,11 @@ export async function refreshRates(db, source, now) {
       }
       await t.run(
         "INSERT INTO fx_rate (currency, rate_x10000, source, fetched_at, valid_from, valid_to, margin_bps, status, note) VALUES (?,?,?,?,?,?,0,'active',?)",
-        cur, x, source.name, now, day, day + DAY, prev ? `moved ${move.toFixed(2)}% (recorded only, never blocks)` : null,
+        cur, x, fetched.source || source.name, now, day, day + DAY, prev ? `moved ${move.toFixed(2)}% (recorded only, never blocks)` : null,
       );
       results[cur] = 'active';
     }
-    if (bad.length) await alertAll(t, now, 'fx.rate_rejected', { source: source.name, currencies: bad.map((c) => String(c).slice(0, 8)) });
+    if (bad.length) await alertAll(t, now, 'fx.rate_rejected', { source: fetched.source || source.name, currencies: bad.map((c) => String(c).slice(0, 8)) });
     return { ok: bad.length === 0, results };
   });
 }

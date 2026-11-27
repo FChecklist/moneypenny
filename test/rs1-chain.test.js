@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { setup } from './helpers.js';
 import { stubRail } from '../src/rail.js';
 import { verifyBalances, verifyChain } from '../src/ledger.js';
+import { refreshRates, utcDayStart } from '../src/fx.js';
 import { createWallet, createPaymentSide, memoryStore } from '../packages/console-wallet/index.js';
 
 test('R1. Rs 1 test: one pack of 1 credit at 100 paise, bought once, spent once, ledger balanced; a repeated webhook credits nothing more', async () => {
@@ -42,4 +43,20 @@ test('R1. Rs 1 test: one pack of 1 credit at 100 paise, bought once, spent once,
   assert.equal((await verifyChain(s.ctx())).ok, true);
   const kinds = (await s.db.all('SELECT kind, delta FROM entry ORDER BY seq')).map((e) => `${e.kind}:${e.delta}`);
   assert.deepEqual(kinds, ['purchase:1', 'hold:-1', 'capture:0']);
+});
+
+test('R2. exchange-rate rule from step 2: a stub-source rate refuses INR orders; a rate set by hand does not', async () => {
+  const s = await setup({ requireRate: true });
+  s.app.rail = stubRail;
+  await s.admin.put('/v1/admin/settings', { inr_packs: { 1: 100 }, buy_min_credits: 1 });
+  const ask = (ref) => s.api.post('/v1/buy_credits', { email: 'owner@example.com', credits: 1, currency: 'INR', order_ref: ref });
+  await refreshRates(s.db, { name: 'stub', async fetch() { return { rates: { INR: 88 } }; } }, utcDayStart(s.clock.t));
+  const refused = await ask('r2-stub');
+  assert.equal(refused.status, 503);
+  assert.equal(refused.body.error.code, 'rate_source_not_configured');
+  // the owner puts a rate in by hand (setup call source 'manual'): the pack can be bought again
+  await s.db.tx((t) => t.run("INSERT INTO fx_rate (currency, rate_x10000, source, fetched_at, valid_from, valid_to, margin_bps, status, note) VALUES ('INR', 880000, 'manual', ?, ?, ?, 0, 'active', 'test')", s.clock.t, s.clock.t, utcDayStart(s.clock.t) + 86400000));
+  const ok = await ask('r2-manual');
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.amount_minor, 100);
 });

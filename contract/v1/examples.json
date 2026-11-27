@@ -44,6 +44,10 @@
       "base_currency": "INR",
       "rate_state": "fresh",
       "rate_as_of": "2026-11-17T00:00:00.000Z",
+      "rate_source": "er-api",
+      "rate_attribution": "Rates by Exchange Rate API, https://www.exchangerate-api.com",
+      "rate_lock_minutes": 120,
+      "price_note_en": "Price held for 2 hours. After that, credits may differ.",
       "inr_paise_per_usd": 7350,
       "local": {
         "currency": "EUR",
@@ -127,7 +131,12 @@
       "currency": "INR",
       "amount_minor": 147000,
       "pay_url": "https://pay.invalid/stub/ord_...",
-      "rail_order_id": "STUB-ORD-ord_..."
+      "rail_order_id": "STUB-ORD-ord_...",
+      "rate_source": "er-api",
+      "rate_as_of": "2026-11-17T00:00:00.000Z",
+      "rate_attribution": "Rates by Exchange Rate API, https://www.exchangerate-api.com",
+      "rate_lock_minutes": 120,
+      "price_note_en": "Price held for 2 hours. After that, credits may differ."
     }
   },
   "rail_confirm": {

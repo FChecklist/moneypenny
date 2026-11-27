@@ -5,9 +5,9 @@ For going live (steps, secret names, the Rs 1 test, flags, rollback) see `docs/G
 ## Version
 
 - Live version: **0.1.0** (live since 19 Nov 2026 IST, code 65b86c8).
-- Prepared, not deployed: **0.2.2** (22 Nov 2026 IST; it supersedes 0.2.0 and 0.2.1, which were prepared and never deployed). `package.json` and `version.json` say 0.2.2; `preparedAt` is the time of the commit that carries it; `version.json` has `status: "prepared, not deployed"`, `releasedAt: null` and `commit: null` until the deployer fills them in at deploy time (and sets `status` to `deployed`).
+- Prepared, not deployed: **0.3.0** (27 Nov 2026). It joins master's exchange-rate step (called 0.2.0 on master) with the go-live preparation (numbered 0.2.0 to 0.2.2 on the branch, never released). `package.json` and `version.json` say 0.3.0; `preparedAt` is the time of the commit that carries it; `version.json` has `status: "prepared, not deployed"`, `releasedAt: null` and `commit: null` until the deployer fills them in at deploy time (and sets `status` to `deployed`).
 - Where the version lives: `version.json` at the repo root (product, version, releasedAt, releasedAtIST, commit, and a `changes` list). This product has no static site; the Worker serves the API only, so `version.json` is not served. Version history in words: `CHANGELOG.md`.
-- Not yet deployed: everything since 65b86c8 (INR fixed pack price, console wallet module, the go-live hardening below). All of it is in 0.2.2.
+- Not yet deployed: everything since 65b86c8 (INR fixed pack price, console wallet module, the go-live hardening below). All of it is in 0.3.0.
 
 ### How to bump (mandatory for every deployed change)
 
@@ -19,7 +19,7 @@ For going live (steps, secret names, the Rs 1 test, flags, rollback) see `docs/G
    - this Version section
 3. Never deploy without the bump. Version notes live only in this repo's own git.
 
-## Go-live knowledge (0.2.2)
+## Go-live knowledge (0.3.0)
 
 - Payment chain: game -> `console.corporatetambola.com` -> Moneypenny -> IT Services (Pages + D1) -> Razorpay. One payee (IT Services), one gateway (Razorpay) in every text. Moneypenny never moves money.
 - The live Worker has no payment side (`unconfiguredRail` in `src/worker.js`): `buy_credits` refuses. Connecting IT Services means a new adapter that passes `railContract` (`src/rail.js`), shipped as its own release with two audits.
@@ -31,3 +31,11 @@ For going live (steps, secret names, the Rs 1 test, flags, rollback) see `docs/G
 - A forged call is refused before it reaches the single writer (`precheckSignature` in `src/auth.js`). Logs go through `redact` (`src/util.js`), best effort, first 2000 characters only.
 - Open: IT Services adapter and Pages/D1 side, owner-only gate for the test, console permanent store and 2-minute job, scheduling of sweep and event sending, Moneypenny Chat (does not exist in this repo), owner decisions in `OWNER-DECISIONS.md`.
 - Test fixtures use `example.com` addresses only for new tests; older tests use `x.com` placeholders that never leave the test run.
+
+## FX rates (27 Nov 2026, v0.2.0)
+- Rate = USD/INR taken at 00:00 GMT, valid for that UTC day. Older than 24 h (from `fetched_at`) = stale: new INR orders get 503 `rate_stale`; USD still works. A rate fetched at exactly 00:00 therefore has no "fallback" window: it is fresh until midnight, then stale after 24 h.
+- An order keeps its rate for `rate_lock_minutes` (120) even across midnight. A late payment is credited at the new rate. Margin 5% (`fx_margin_bps` 500).
+- Sources in order: `er-api` (open.er-api.com, needs the attribution text `RATE_ATTRIBUTION` shown with prices), then `fawaz` (jsDelivr currency-api). Each source rejects a bad answer itself so the chain falls back; refreshRates still applies the INR band (10 to 500) and the 50% move guard.
+- A stub rate (source `stub`) never prices INR orders: 503 `rate_source_not_configured`. Only for tests: `allowStubRate`.
+- Nothing in the Worker calls `refreshRates` yet (no cron/scheduled handler exists). Rates must be fed by `node scripts/fx.js refresh` or a scheduled job added later; until then INR stays refused in production.
+- Tests use fake fetch functions only (`test/fx-sources.test.js`); never the network.

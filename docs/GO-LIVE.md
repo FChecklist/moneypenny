@@ -1,7 +1,7 @@
 # Go-live: Moneypenny (Priority 1)
 
 Plain words. Written for the owner (Rajat Agarwal) and for whoever carries out the steps.
-Version of this plan: Moneypenny 0.2.2 (documents the 0.2.0 go-live preparation). Nothing in this file has been done: no deploy, no merge, no real payment.
+Version of this plan: Moneypenny 0.3.0 (the go-live preparation, numbered 0.2.0 to 0.2.2 while it was on its own branch, joined with master's exchange-rate step). Nothing in this file has been done: no deploy, no merge, no real payment.
 
 ## 1. The five facts you must know first
 
@@ -74,7 +74,7 @@ Never paste a value into chat, a ticket, a screenshot, a commit or a log. A pers
 
 - B1. Read both flags in game and console. Both OFF. Write the readings down.
 - B2. In `wrangler.toml`: set `MNP_STATUS_URL`, **delete** `MNP_STATUS_OPTIONAL`. (Code change, so it goes in a PR.)
-- B3. Deploy Worker 0.2.1 (`wrangler deploy`). The database migrates itself on start. Migration 0004 only adds a column with a default, so the old code still runs on it (this is what makes rollback safe).
+- B3. Deploy Worker 0.3.0 (`wrangler deploy`). The database migrates itself on start. Migration 0004 only adds a column with a default, so the old code still runs on it (this is what makes rollback safe).
 - B4. Dark smoke test (reads only, no money):
   - `GET /health` -> `ok: true`. **This is true only once the adapter (A1) is wired.** On code that still has `unconfiguredRail`, `GET /health` answers `ok: false`; that is expected and not an alarm, but it also means you must not deploy 0.2.1 on its own and then expect step B4 to pass.
   - `GET /v1/admin/health` (admin key) -> ledger chain and audit chain `ok`, no mismatch.
@@ -89,6 +89,7 @@ Never paste a value into chat, a ticket, a screenshot, a commit or a log. A pers
   - `buy_min_credits` = `1` (default is 100).
   - Price list: product = the product code the console uses for the game, item `rs1_test`, `credits` = 1.
   - These numbers are rehearsed in `test/rs1-chain.test.js`.
+  - **Exchange-rate rule from master (step 2):** an INR order is refused with 503 `rate_source_not_configured` while the active rate came from the **stub** source. With no rate stored at all, or a rate set by the owner (`set_rate`, source `manual`), or a real source (`er-api`, `fawaz`), the Rs 1 fixed pack works. So: do **not** run the rate refresh with the offline stub (`MNP_FX_SOURCE=stub`) on the live data. Nothing in the Worker refreshes rates yet (no scheduled job), so fixed packs are the only INR path in this plan. This is checked in `test/rs1-chain.test.js` (R1 and R2).
   - Razorpay's smallest order is normally Rs 1.00. Confirm for your account in the Razorpay dashboard before the test.
 - C3. Use the owner's own e-mail, already verified by the console. Never a test address that someone else can read.
 - C4. Check the console rejects any other pack price (the test pack must be the only INR pack open, and only the owner may see it; see section 8, item 3).
@@ -190,3 +191,4 @@ What cannot be rolled back: ledger entries (by design) and Razorpay payments (re
 - New tests: `test/golive.test.js`, `test/rs1-chain.test.js`.
 - 0.2.1: docs only except one small code change, `redact` now looks at the first 2000 characters only (a test fails without it). Three more guards are listed and watched; no money behaviour changed.
 - 0.2.2 (this fix round): docs and one test only, no source code change. Section 6 now says the same one rule as section 4; D1 step 3 says where the gate sits; the two unwatched guards are listed above; the lock-freeze wording now covers the admin sweep (about 100 seconds worst case).
+- 0.3.0 (this round): master moved on (exchange-rate step 2, called 0.2.0 on master), so this branch was joined with it and renumbered 0.3.0. The only code merge was `src/api.js` (the pre-check, redact and the 30-second health cache sit beside master's rate-age change). Master's rule that INR orders are refused on a stub rate is explained in step C2 and tested (R2). No other go-live step changed. Tests: 327 pass.

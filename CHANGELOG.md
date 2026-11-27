@@ -2,7 +2,18 @@
 
 Newest first. Dates are in IST. Version numbers are MAJOR.MINOR.PATCH. This product only started numbering versions on 21 Nov 2026; everything built before that sits under 0.1.0 (the number already in `package.json`) and is listed below as dated milestones taken from git history.
 
-## 0.2.2 (prepared 2026-11-22T16:25:21 IST; NOT deployed yet)
+## 0.3.0 (prepared 27 Nov 2026; NOT deployed yet)
+
+Live code is still 0.1.0. This number goes live only after two independent audit passes on the exact code, and `version.json` then gets its release time and code id.
+
+In plain words:
+
+- This release joins two lines of work. Master already carries the exchange-rate work (step 2, called 0.2.0 on master). This branch carries the go-live preparation, which had been numbered 0.2.0, 0.2.1 and 0.2.2 on the branch; none of those was ever released, so they are folded into 0.3.0 (their notes are kept below).
+- Go-live plan `docs/GO-LIVE.md`, forged-call pre-check, log cleaning, health page limit, `railContract` and `npm run guards`: see the three rounds below. Nothing is turned on, no money flag changed, nothing deployed.
+- Joined with the exchange-rate work: INR orders are refused while the active rate came from the stub source. The Rs 1 fixed pack still works when no rate is stored or the owner set one by hand; a new test (R2) proves both sides, and `docs/GO-LIVE.md` step C2 says not to refresh rates with the stub on live data.
+- Not changed by the join: no deploy setting, no flag. Still open: the IT Services connection, the IT Services pay page, the console's permanent order store, the owner-only gate, scheduling of housekeeping, the rate refresh job and event sending, and Moneypenny Chat.
+
+## Go-live prep, round 3 (was numbered 0.2.2 on the branch; never released; prepared 2026-11-22T16:25:21 IST; NOT deployed yet)
 
 Second fix round on the go-live plan, after audit 1 of 0.2.1 said FAIL (one Medium, docs only; audit 2 passed). Live code is still 0.1.0. Nothing is turned on, no money flag changed, nothing deployed, no source code changed.
 
@@ -15,7 +26,7 @@ In plain words:
 - Test G21 (log cleaner length cut) no longer depends on how fast the computer is. It now checks how long the text is when each pattern runs.
 - Same 46 listed guards, 319 tests.
 
-## 0.2.1 (prepared 22 Nov 2026, 10:28 UTC / 15:58 IST; NOT deployed yet)
+## Go-live prep, round 2 (was numbered 0.2.1 on the branch; never released; prepared 22 Nov 2026, 10:28 UTC / 15:58 IST; NOT deployed yet)
 
 Fix round after two independent audits of 0.2.0 (both said FAIL, on the go-live plan). Live code is still 0.1.0. Nothing is turned on, no money flag changed, nothing deployed.
 
@@ -31,7 +42,7 @@ In plain words:
 - 3 new tests (G19 to G21). Test e-mail changed to an example.com address.
 - Not changed: the IT Services adapter, IT Services side, console store, scheduling, Moneypenny Chat remain open (`docs/GO-LIVE.md`, section 8).
 
-## 0.2.0 (prepared 21 Nov 2026, 22:50 IST; NOT deployed yet)
+## Go-live prep, round 1 (was numbered 0.2.0 on the branch; never released; prepared 21 Nov 2026, 22:50 IST; NOT deployed yet)
 
 Live code is still 0.1.0. This number goes live only after two independent audit passes on the exact code, and `version.json` then gets its release time and code id.
 
@@ -47,7 +58,14 @@ In plain words:
 - Not changed: no money flag, no deploy setting, no database change. Still open: the IT Services connection inside Moneypenny, the IT Services pay page, the console's permanent order store, scheduling of housekeeping and event sending, and Moneypenny Chat (nothing of it exists in this repo). See `docs/GO-LIVE.md`, section 8.
 - Included in this release (in the repo since 19 Nov, never deployed): the console wallet module, the fixed INR pack price, and the version files first proposed in PR 1 (which this branch contains).
 
-## Not yet deployed (in the repo, not live) - now rolled into 0.2.0 and then 0.2.1 above
+## 0.2.0 - 2026-11-27 (Moneypenny step 2, real exchange-rate sources; not deployed; already on master)
+- Real exchange-rate sources: Exchange Rate API (`er-api`) with the fawaz currency API (`fawaz`) as fallback (`src/fx-sources.js`). The source name is stored in `fx_rate.source`. `RATE_ATTRIBUTION` text exported. Sanity band and the 50% move guard unchanged.
+- `fx_max_age_hours` default 24 (was 72). Migration 0005 moves tenants that still hold 72 to 24; other values are kept.
+- INR orders (`buy_credits`) are refused with 503 `rate_source_not_configured` while the active rate came from the stub. USD unaffected. Tests can allow the stub with `createApp({ allowStubRate: true })`.
+- `GET /v1/quote` and `buy_credits` answers add `rate_source`, `rate_as_of`, `rate_attribution` (real source only), `rate_lock_minutes`, `price_note_en`. No existing field renamed.
+- `scripts/fx.js refresh` uses the real chain (set `MNP_FX_SOURCE=stub` for the offline stub).
+
+## Not yet deployed (in the repo, not live) - now rolled into 0.3.0 above
 
 These changes are after the deployed code (65b86c8). They are part of 0.2.0 (and so of 0.2.1) and need fresh independent audit passes before a deploy.
 
